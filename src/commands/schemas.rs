@@ -1,0 +1,360 @@
+use crate::commands::resources::build_fields;
+use crate::models::resource::Field;
+use crate::models::schema::{Composition, DiscriminatorInfo, SchemaModel};
+use crate::spec;
+use std::collections::HashSet;
+
+/// Returns all schema names sorted alphabetically.
+pub fn list_schemas(api: &openapiv3::OpenAPI) -> Vec<String> {
+    api.components
+        .as_ref()
+        .map(|c| {
+            let mut names: Vec<String> = c.schemas.keys().cloned().collect();
+            names.sort();
+            names
+        })
+        .unwrap_or_default()
+}
+
+/// Looks up a schema by name (case-sensitive first, then case-insensitive fallback).
+pub fn find_schema<'a>(
+    api: &'a openapiv3::OpenAPI,
+    name: &str,
+) -> Option<&'a openapiv3::Schema> {
+    let schemas = &api.components.as_ref()?.schemas;
+
+    // Exact match first
+    if let Some(ref_or) = schemas.get(name) {
+        return match ref_or {
+            openapiv3::ReferenceOr::Item(s) => Some(s),
+            openapiv3::ReferenceOr::Reference { reference } => {
+                let sname = spec::schema_name_from_ref(reference)?;
+                match schemas.get(sname)? {
+                    openapiv3::ReferenceOr::Item(s) => Some(s),
+                    _ => None,
+                }
+            }
+        };
+    }
+
+    // Case-insensitive fallback
+    let lower = name.to_lowercase();
+    for (key, ref_or) in schemas {
+        if key.to_lowercase() == lower {
+            return match ref_or {
+                openapiv3::ReferenceOr::Item(s) => Some(s),
+                _ => None,
+            };
+        }
+    }
+
+    None
+}
+
+/// Returns up to 3 schema names with Jaro-Winkler distance > 0.8 from `name`.
+pub fn suggest_similar_schemas(api: &openapiv3::OpenAPI, name: &str) -> Vec<String> {
+    let lower = name.to_lowercase();
+    api.components
+        .as_ref()
+        .map(|c| {
+            c.schemas
+                .keys()
+                .filter(|k| strsim::jaro_winkler(&lower, &k.to_lowercase()) > 0.8)
+                .take(3)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Build a SchemaModel from a named schema — with fields, composition, and optional expansion.
+pub fn build_schema_model(
+    api: &openapiv3::OpenAPI,
+    name: &str,
+    expand: bool,
+    max_depth: usize,
+) -> Option<SchemaModel> {
+    let schema = find_schema(api, name)?;
+
+    let description = schema.schema_data.description.clone();
+
+    let (fields, composition) = match &schema.schema_kind {
+        openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => {
+            let fields = build_fields(api, schema, &obj.required);
+            (fields, None)
+        }
+        openapiv3::SchemaKind::Type(openapiv3::Type::String(str_type))
+            if !str_type.enumeration.is_empty() =>
+        {
+            let values: Vec<String> = str_type
+                .enumeration
+                .iter()
+                .filter_map(|v| v.clone())
+                .collect();
+            (Vec::new(), Some(Composition::Enum(values)))
+        }
+        openapiv3::SchemaKind::AllOf { .. } => {
+            let fields = build_fields(api, schema, &[]);
+            (fields, Some(Composition::AllOf))
+        }
+        openapiv3::SchemaKind::OneOf { one_of } => {
+            let variants = extract_variant_names(one_of);
+            (Vec::new(), Some(Composition::OneOf(variants)))
+        }
+        openapiv3::SchemaKind::AnyOf { any_of } => {
+            let variants = extract_variant_names(any_of);
+            (Vec::new(), Some(Composition::AnyOf(variants)))
+        }
+        _ => (Vec::new(), None),
+    };
+
+    // Extract discriminator (lives on schema_data, independent of schema_kind)
+    let discriminator = schema.schema_data.discriminator.as_ref().map(|d| {
+        let mapping = d
+            .mapping
+            .iter()
+            .map(|(value, reference)| {
+                let schema_name = spec::schema_name_from_ref(reference)
+                    .unwrap_or(reference.as_str())
+                    .to_string();
+                (value.clone(), schema_name)
+            })
+            .collect();
+        DiscriminatorInfo {
+            property_name: d.property_name.clone(),
+            mapping,
+        }
+    });
+
+    // Expand nested schemas if requested
+    let fields = if expand {
+        let mut visited = HashSet::new();
+        visited.insert(name.to_string());
+        expand_fields(api, fields, &mut visited, 1, max_depth)
+    } else {
+        fields
+    };
+
+    Some(SchemaModel {
+        name: name.to_string(),
+        description,
+        fields,
+        composition,
+        discriminator,
+        external_docs: None,
+    })
+}
+
+fn extract_variant_names(refs: &[openapiv3::ReferenceOr<openapiv3::Schema>]) -> Vec<String> {
+    refs.iter()
+        .filter_map(|r| match r {
+            openapiv3::ReferenceOr::Reference { reference } => {
+                spec::schema_name_from_ref(reference).map(|s| s.to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn expand_fields_pub(
+    api: &openapiv3::OpenAPI,
+    fields: Vec<Field>,
+    visited: &mut HashSet<String>,
+    depth: usize,
+    max_depth: usize,
+) -> Vec<Field> {
+    expand_fields(api, fields, visited, depth, max_depth)
+}
+
+fn expand_fields(
+    api: &openapiv3::OpenAPI,
+    fields: Vec<Field>,
+    visited: &mut HashSet<String>,
+    depth: usize,
+    max_depth: usize,
+) -> Vec<Field> {
+    if depth > max_depth {
+        return fields;
+    }
+
+    fields
+        .into_iter()
+        .map(|mut field| {
+            if let Some(ref schema_name) = field.nested_schema_name {
+                if !visited.contains(schema_name) {
+                    visited.insert(schema_name.clone());
+
+                    if let Some(nested_schema) = find_schema(api, schema_name) {
+                        let required = match &nested_schema.schema_kind {
+                            openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => {
+                                obj.required.clone()
+                            }
+                            _ => vec![],
+                        };
+                        let nested = build_fields(api, nested_schema, &required);
+                        field.nested_fields =
+                            expand_fields(api, nested, visited, depth + 1, max_depth);
+                    }
+
+                    visited.remove(schema_name);
+                }
+            }
+            field
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load_petstore_api() -> openapiv3::OpenAPI {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let content =
+            std::fs::read_to_string(manifest_dir.join("tests/fixtures/petstore.yaml")).unwrap();
+        serde_yaml_ng::from_str(&content).unwrap()
+    }
+
+    #[test]
+    fn test_list_schemas() {
+        let api = load_petstore_api();
+        let names = list_schemas(&api);
+        assert!(names.contains(&"Pet".to_string()));
+        assert!(names.contains(&"Owner".to_string()));
+        assert!(names.contains(&"PetList".to_string()));
+        assert!(names.contains(&"PetOrOwner".to_string()));
+    }
+
+    #[test]
+    fn test_find_schema_exact() {
+        let api = load_petstore_api();
+        assert!(find_schema(&api, "Pet").is_some());
+        assert!(find_schema(&api, "NonExistent").is_none());
+    }
+
+    #[test]
+    fn test_find_schema_case_insensitive() {
+        let api = load_petstore_api();
+        assert!(find_schema(&api, "pet").is_some());
+    }
+
+    #[test]
+    fn test_build_schema_model_pet() {
+        let api = load_petstore_api();
+        let model = build_schema_model(&api, "Pet", false, 5).unwrap();
+        assert_eq!(model.name, "Pet");
+        assert!(model.composition.is_none());
+        assert!(!model.fields.is_empty());
+        let field_names: Vec<&str> = model.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(field_names.contains(&"id"));
+        assert!(field_names.contains(&"name"));
+    }
+
+    #[test]
+    fn test_build_schema_model_oneof() {
+        let api = load_petstore_api();
+        let model = build_schema_model(&api, "PetOrOwner", false, 5).unwrap();
+        match &model.composition {
+            Some(Composition::OneOf(variants)) => {
+                assert!(variants.contains(&"Pet".to_string()));
+                assert!(variants.contains(&"Owner".to_string()));
+            }
+            other => panic!("Expected OneOf composition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_schema_model_allof() {
+        let api = load_petstore_api();
+        let model = build_schema_model(&api, "PetList", false, 5).unwrap();
+        match &model.composition {
+            Some(Composition::AllOf) => {}
+            other => panic!("Expected AllOf composition, got {:?}", other),
+        }
+        assert!(!model.fields.is_empty(), "AllOf should have flattened fields");
+    }
+
+    #[test]
+    fn test_expand_schema() {
+        let api = load_petstore_api();
+        let model = build_schema_model(&api, "Pet", true, 5).unwrap();
+        let owner_field = model.fields.iter().find(|f| f.name == "owner");
+        assert!(owner_field.is_some(), "Pet should have owner field");
+        assert!(
+            !owner_field.unwrap().nested_fields.is_empty(),
+            "Expanded owner should have nested fields"
+        );
+    }
+
+    #[test]
+    fn test_build_schema_model_enum() {
+        let api = load_petstore_api();
+        let model = build_schema_model(&api, "PetStatus", false, 5).unwrap();
+        assert_eq!(model.name, "PetStatus");
+        match &model.composition {
+            Some(Composition::Enum(values)) => {
+                assert!(values.contains(&"available".to_string()));
+                assert!(values.contains(&"pending".to_string()));
+                assert!(values.contains(&"sold".to_string()));
+                assert_eq!(values.len(), 3);
+            }
+            other => panic!("Expected Enum composition, got {:?}", other),
+        }
+        assert!(model.fields.is_empty(), "Enum schema should have no fields");
+    }
+
+    // ─── Task 4.1: Jaro-Winkler suggestion tests ───
+
+    #[test]
+    fn test_suggest_similar_schemas_transposition() {
+        // "Ownre" is a transposition of "Owner" — contains() misses this
+        let api = load_petstore_api();
+        let suggestions = suggest_similar_schemas(&api, "Ownre");
+        assert!(
+            suggestions.contains(&"Owner".to_string()),
+            "Jaro-Winkler should suggest 'Owner' for transposition typo 'Ownre', got: {:?}",
+            suggestions
+        );
+    }
+
+    #[test]
+    fn test_suggest_similar_schemas_extra_char() {
+        // "Pett" has an extra char — contains() misses this
+        let api = load_petstore_api();
+        let suggestions = suggest_similar_schemas(&api, "Pett");
+        assert!(
+            suggestions.contains(&"Pet".to_string()),
+            "Jaro-Winkler should suggest 'Pet' for near-match 'Pett', got: {:?}",
+            suggestions
+        );
+    }
+
+    #[test]
+    fn test_suggest_similar_schemas_no_false_positive() {
+        // "Xyz" should not match any schema
+        let api = load_petstore_api();
+        let suggestions = suggest_similar_schemas(&api, "Xyz");
+        assert!(
+            suggestions.is_empty(),
+            "Jaro-Winkler must not suggest schemas for completely different input 'Xyz', got: {:?}",
+            suggestions
+        );
+    }
+
+    #[test]
+    fn test_build_schema_model_discriminator() {
+        let api = load_petstore_api();
+        let model = build_schema_model(&api, "PetOrOwner", false, 5).unwrap();
+        let disc = model.discriminator.as_ref().expect("PetOrOwner should have a discriminator");
+        assert_eq!(disc.property_name, "type");
+        assert!(
+            disc.mapping.iter().any(|(k, v)| k == "pet" && v == "Pet"),
+            "Expected pet→Pet mapping, got: {:?}",
+            disc.mapping
+        );
+        assert!(
+            disc.mapping.iter().any(|(k, v)| k == "owner" && v == "Owner"),
+            "Expected owner→Owner mapping"
+        );
+    }
+}

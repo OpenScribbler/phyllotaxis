@@ -1,0 +1,1130 @@
+use std::collections::BTreeMap;
+
+use crate::models::resource::{
+    humanize_tag_name, is_alpha_tag, is_deprecated_tag, slugify, Endpoint, Field, ResourceGroup,
+};
+use crate::spec;
+
+pub fn extract_resource_groups(api: &openapiv3::OpenAPI) -> Vec<ResourceGroup> {
+    // Build initial groups from the global tags list
+    let mut groups: BTreeMap<String, ResourceGroup> = BTreeMap::new();
+    for tag in &api.tags {
+        let slug = slugify(&tag.name);
+        groups.insert(
+            tag.name.clone(),
+            ResourceGroup {
+                slug,
+                display_name: humanize_tag_name(&tag.name),
+                description: tag.description.clone(),
+                is_deprecated: is_deprecated_tag(&tag.name),
+                is_alpha: is_alpha_tag(&tag.name),
+                endpoints: Vec::new(),
+            },
+        );
+    }
+
+    // Iterate all paths and operations, assigning endpoints to groups by tag
+    for (path_str, path_item_ref) in &api.paths.paths {
+        let path_item = match path_item_ref {
+            openapiv3::ReferenceOr::Item(item) => item,
+            openapiv3::ReferenceOr::Reference { .. } => continue,
+        };
+
+        let methods: &[(&str, &Option<openapiv3::Operation>)] = &[
+            ("GET", &path_item.get),
+            ("POST", &path_item.post),
+            ("PUT", &path_item.put),
+            ("DELETE", &path_item.delete),
+            ("PATCH", &path_item.patch),
+            ("HEAD", &path_item.head),
+            ("OPTIONS", &path_item.options),
+            ("TRACE", &path_item.trace),
+        ];
+
+        for &(method, op_opt) in methods {
+            let op = match op_opt {
+                Some(op) => op,
+                None => continue,
+            };
+
+            let is_deprecated = op.deprecated;
+            let is_alpha = matches!(
+                op.extensions.get("x-alpha"),
+                Some(serde_json::Value::Bool(true))
+            );
+
+            let endpoint = Endpoint {
+                method: method.to_string(),
+                path: path_str.clone(),
+                summary: op.summary.clone(),
+                description: op.description.clone(),
+                is_deprecated,
+                is_alpha,
+                external_docs: None,
+                parameters: Vec::new(),
+                request_body: None,
+                responses: Vec::new(),
+                security_schemes: Vec::new(),
+                drill_deeper: Vec::new(),
+            };
+
+            if op.tags.is_empty() {
+                continue;
+            }
+
+            for tag_name in &op.tags {
+                // Get or create the group for this tag
+                let group = groups.entry(tag_name.clone()).or_insert_with(|| {
+                    ResourceGroup {
+                        slug: slugify(tag_name),
+                        display_name: humanize_tag_name(tag_name),
+                        description: None,
+                        is_deprecated: is_deprecated_tag(tag_name),
+                        is_alpha: is_alpha_tag(tag_name),
+                        endpoints: Vec::new(),
+                    }
+                });
+                group.endpoints.push(endpoint.clone());
+            }
+        }
+    }
+
+    // Sort by slug (BTreeMap is already sorted by key, but key is tag_name not slug)
+    let mut result: Vec<ResourceGroup> = groups.into_values().collect();
+    result.sort_by(|a, b| a.slug.cmp(&b.slug));
+    result
+}
+
+pub fn find_resource_group(groups: &[ResourceGroup], slug: &str) -> Option<usize> {
+    let slug_lower = slug.to_lowercase();
+    groups
+        .iter()
+        .position(|g| g.slug.to_lowercase() == slug_lower)
+}
+
+pub fn get_resource_detail(api: &openapiv3::OpenAPI, slug: &str) -> Option<ResourceGroup> {
+    let groups = extract_resource_groups(api);
+    let idx = find_resource_group(&groups, slug)?;
+    Some(groups.into_iter().nth(idx).unwrap())
+}
+
+pub fn build_fields(
+    api: &openapiv3::OpenAPI,
+    schema: &openapiv3::Schema,
+    required_fields: &[String],
+) -> Vec<Field> {
+    // Handle allOf: flatten all constituent schemas
+    if let openapiv3::SchemaKind::AllOf { all_of } = &schema.schema_kind {
+        let mut all_fields: Vec<Field> = Vec::new();
+        let mut merged_required: Vec<String> = required_fields.to_vec();
+
+        for ref_or in all_of {
+            let resolved = match ref_or {
+                openapiv3::ReferenceOr::Item(s) => Some(s as &openapiv3::Schema),
+                openapiv3::ReferenceOr::Reference { reference } => {
+                    spec::schema_name_from_ref(reference).and_then(|sname| {
+                        api.components
+                            .as_ref()
+                            .and_then(|c| c.schemas.get(sname))
+                            .and_then(|s| match s {
+                                openapiv3::ReferenceOr::Item(schema) => {
+                                    Some(schema as &openapiv3::Schema)
+                                }
+                                _ => None,
+                            })
+                    })
+                }
+            };
+
+            if let Some(resolved) = resolved {
+                // Collect required fields from this constituent
+                if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) =
+                    &resolved.schema_kind
+                {
+                    for r in &obj.required {
+                        if !merged_required.contains(r) {
+                            merged_required.push(r.clone());
+                        }
+                    }
+                }
+
+                let sub_fields = build_fields(api, resolved, &merged_required);
+                for field in sub_fields {
+                    // Dedup: later wins
+                    all_fields.retain(|f| f.name != field.name);
+                    all_fields.push(field);
+                }
+            }
+        }
+
+        return all_fields;
+    }
+
+    let obj = match &schema.schema_kind {
+        openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => obj,
+        _ => return Vec::new(),
+    };
+
+    let mut fields = Vec::new();
+
+    for (name, ref_or) in &obj.properties {
+        let (resolved_schema, schema_name): (Option<&openapiv3::Schema>, Option<&str>) =
+            match ref_or {
+                openapiv3::ReferenceOr::Item(boxed) => (Some(boxed), None),
+                openapiv3::ReferenceOr::Reference { reference } => {
+                    match spec::schema_name_from_ref(reference) {
+                        Some(sname) => {
+                            let resolved = api
+                                .components
+                                .as_ref()
+                                .and_then(|c| c.schemas.get(sname))
+                                .and_then(|s| match s {
+                                    openapiv3::ReferenceOr::Item(schema) => {
+                                        Some(schema as &openapiv3::Schema)
+                                    }
+                                    _ => None,
+                                });
+                            (resolved, Some(sname))
+                        }
+                        None => (None, None),
+                    }
+                }
+            };
+
+        let resolved = match resolved_schema {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let type_display = if let Some(sname) = schema_name {
+            sname.to_string()
+        } else {
+            format_type_display(&resolved.schema_kind)
+        };
+
+        let enum_values = extract_enum_values(&resolved.schema_kind);
+
+        fields.push(Field {
+            name: name.clone(),
+            type_display,
+            required: required_fields.contains(name),
+            optional: !required_fields.contains(name),
+            nullable: resolved.schema_data.nullable,
+            read_only: resolved.schema_data.read_only,
+            description: resolved.schema_data.description.clone(),
+            enum_values,
+            default_value: resolved.schema_data.default.clone(),
+            example: resolved.schema_data.example.clone(),
+            nested_schema_name: schema_name.map(|s| s.to_string()),
+            nested_fields: Vec::new(),
+        });
+    }
+
+    fields
+}
+
+fn format_type_display(kind: &openapiv3::SchemaKind) -> String {
+    match kind {
+        openapiv3::SchemaKind::Type(t) => match t {
+            openapiv3::Type::String(s) => {
+                match &s.format {
+                    openapiv3::VariantOrUnknownOrEmpty::Item(fmt) => {
+                        format!("string/{}", format_variant_name(fmt))
+                    }
+                    openapiv3::VariantOrUnknownOrEmpty::Unknown(s) => {
+                        format!("string/{}", s)
+                    }
+                    openapiv3::VariantOrUnknownOrEmpty::Empty => "string".to_string(),
+                }
+            }
+            openapiv3::Type::Integer(_) => "integer".to_string(),
+            openapiv3::Type::Number(_) => "number".to_string(),
+            openapiv3::Type::Boolean(_) => "boolean".to_string(),
+            openapiv3::Type::Array(arr) => match &arr.items {
+                Some(openapiv3::ReferenceOr::Reference { reference }) => {
+                    let name =
+                        spec::schema_name_from_ref(reference.as_str()).unwrap_or("object");
+                    format!("{}[]", name)
+                }
+                _ => "array".to_string(),
+            },
+            openapiv3::Type::Object(_) => "object".to_string(),
+        },
+        // AnySchema: no explicit type constraint. Recover from typ/format fields.
+        // Covers cases like `format: boolean` without `type: boolean` in some generated specs.
+        openapiv3::SchemaKind::Any(any) => {
+            if let Some(ref typ) = any.typ {
+                return typ.clone();
+            }
+            "object".to_string()
+        }
+        _ => "object".to_string(),
+    }
+}
+
+fn format_variant_name(fmt: &openapiv3::StringFormat) -> String {
+    match fmt {
+        openapiv3::StringFormat::DateTime => "date-time".to_string(),
+        openapiv3::StringFormat::Date => "date".to_string(),
+        openapiv3::StringFormat::Password => "password".to_string(),
+        openapiv3::StringFormat::Byte => "byte".to_string(),
+        openapiv3::StringFormat::Binary => "binary".to_string(),
+    }
+}
+
+fn extract_enum_values(kind: &openapiv3::SchemaKind) -> Vec<String> {
+    match kind {
+        openapiv3::SchemaKind::Type(openapiv3::Type::String(s)) => s
+            .enumeration
+            .iter()
+            .filter_map(|v| v.clone())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn resolve_path_item<'a>(
+    api: &'a openapiv3::OpenAPI,
+    path: &str,
+) -> Option<&'a openapiv3::PathItem> {
+    match api.paths.paths.get(path)? {
+        openapiv3::ReferenceOr::Item(item) => Some(item),
+        openapiv3::ReferenceOr::Reference { .. } => None,
+    }
+}
+
+fn resolve_operation<'a>(
+    path_item: &'a openapiv3::PathItem,
+    method: &str,
+) -> Option<&'a openapiv3::Operation> {
+    match method.to_uppercase().as_str() {
+        "GET"     => path_item.get.as_ref(),
+        "POST"    => path_item.post.as_ref(),
+        "PUT"     => path_item.put.as_ref(),
+        "DELETE"  => path_item.delete.as_ref(),
+        "PATCH"   => path_item.patch.as_ref(),
+        "HEAD"    => path_item.head.as_ref(),
+        "OPTIONS" => path_item.options.as_ref(),
+        "TRACE"   => path_item.trace.as_ref(),
+        _         => None,
+    }
+}
+
+fn extract_security(
+    api: &openapiv3::OpenAPI,
+    operation: &openapiv3::Operation,
+) -> Vec<String> {
+    operation
+        .security
+        .as_ref()
+        .or(api.security.as_ref())
+        .map(|reqs| {
+            reqs.iter()
+                .flat_map(|req| req.keys().cloned())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_responses(operation: &openapiv3::Operation) -> Vec<crate::models::resource::Response> {
+    use crate::models::resource::Response;
+    let mut responses = Vec::new();
+    for (status, resp_ref) in &operation.responses.responses {
+        let status_code = match status {
+            openapiv3::StatusCode::Code(code) => code.to_string(),
+            openapiv3::StatusCode::Range(range) => format!("{}XX", range),
+        };
+
+        let resp = match resp_ref {
+            openapiv3::ReferenceOr::Item(r) => r,
+            openapiv3::ReferenceOr::Reference { .. } => continue,
+        };
+
+        let (schema_ref_name, example) = resp
+            .content
+            .get("application/json")
+            .map(|media| {
+                let schema_ref = media.schema.as_ref().and_then(|sr| match sr {
+                    openapiv3::ReferenceOr::Reference { reference } => {
+                        spec::schema_name_from_ref(reference).map(|s| s.to_string())
+                    }
+                    _ => None,
+                });
+                (schema_ref, media.example.clone())
+            })
+            .unwrap_or((None, None));
+
+        responses.push(Response {
+            status_code,
+            description: resp.description.clone(),
+            schema_ref: schema_ref_name,
+            example,
+        });
+    }
+    responses
+}
+
+fn merge_parameters(
+    api: &openapiv3::OpenAPI,
+    path_item: &openapiv3::PathItem,
+    operation: &openapiv3::Operation,
+) -> Vec<crate::models::resource::Parameter> {
+    use crate::models::resource::{Parameter, ParameterLocation};
+    let mut params_map: std::collections::BTreeMap<String, Parameter> =
+        std::collections::BTreeMap::new();
+
+    let all_param_refs: Vec<&openapiv3::ReferenceOr<openapiv3::Parameter>> = path_item
+        .parameters
+        .iter()
+        .chain(operation.parameters.iter())
+        .collect();
+
+    for param_ref in all_param_refs {
+        let param = match param_ref {
+            openapiv3::ReferenceOr::Item(p) => p,
+            openapiv3::ReferenceOr::Reference { .. } => continue,
+        };
+
+        let data = match param {
+            openapiv3::Parameter::Query { parameter_data, .. } => {
+                (parameter_data, ParameterLocation::Query)
+            }
+            openapiv3::Parameter::Path { parameter_data, .. } => {
+                (parameter_data, ParameterLocation::Path)
+            }
+            openapiv3::Parameter::Header { parameter_data, .. } => {
+                (parameter_data, ParameterLocation::Header)
+            }
+            _ => continue,
+        };
+
+        let (pdata, location) = data;
+
+        // Extract schema type from parameter format
+        let (schema_type, format, enum_values) =
+            extract_param_schema_info(api, &pdata.format);
+
+        params_map.insert(
+            pdata.name.clone(),
+            Parameter {
+                name: pdata.name.clone(),
+                location,
+                required: pdata.required,
+                schema_type,
+                format,
+                description: pdata.description.clone(),
+                enum_values,
+            },
+        );
+    }
+
+    params_map.into_values().collect()
+}
+
+fn extract_request_body(
+    api: &openapiv3::OpenAPI,
+    operation: &openapiv3::Operation,
+    expand: bool,
+) -> Option<crate::models::resource::RequestBody> {
+    use crate::models::resource::RequestBody;
+
+    operation.request_body.as_ref().and_then(|rb_ref| {
+        let rb = match rb_ref {
+            openapiv3::ReferenceOr::Item(rb) => rb,
+            openapiv3::ReferenceOr::Reference { .. } => return None,
+        };
+
+        let media = rb.content.get("application/json")?;
+        let schema_ref = media.schema.as_ref()?;
+
+        let (schema, top_ref_name): (&openapiv3::Schema, Option<String>) = match schema_ref {
+            openapiv3::ReferenceOr::Item(s) => (s, None),
+            openapiv3::ReferenceOr::Reference { reference } => {
+                let sname = spec::schema_name_from_ref(reference)?;
+                let components = api.components.as_ref()?;
+                match components.schemas.get(sname)? {
+                    openapiv3::ReferenceOr::Item(s) => (s, Some(sname.to_string())),
+                    _ => return None,
+                }
+            }
+        };
+
+        let example = media.example.clone();
+
+        // OneOf/AnyOf request body: surface variant names instead of empty fields
+        let oneof_variants: &[openapiv3::ReferenceOr<openapiv3::Schema>] = match &schema.schema_kind {
+            openapiv3::SchemaKind::OneOf { one_of } => one_of.as_slice(),
+            openapiv3::SchemaKind::AnyOf { any_of } => any_of.as_slice(),
+            _ => &[],
+        };
+        let options: Vec<String> = oneof_variants
+            .iter()
+            .filter_map(|r| match r {
+                openapiv3::ReferenceOr::Reference { reference } => {
+                    spec::schema_name_from_ref(reference).map(|s| s.to_string())
+                }
+                _ => None,
+            })
+            .collect();
+
+        if !options.is_empty() {
+            return Some(RequestBody {
+                content_type: "application/json".to_string(),
+                fields: Vec::new(),
+                options,
+                schema_ref: None,
+                example,
+            });
+        }
+
+        let required: Vec<String> =
+            if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) = &schema.schema_kind
+            {
+                obj.required.clone()
+            } else {
+                vec![]
+            };
+
+        let mut fields = build_fields(api, schema, &required);
+
+        if expand {
+            use crate::commands::schemas::expand_fields_pub;
+            let mut visited = std::collections::HashSet::new();
+            fields = expand_fields_pub(api, fields, &mut visited, 1, 5);
+        }
+
+        Some(RequestBody {
+            content_type: "application/json".to_string(),
+            fields,
+            options: Vec::new(),
+            schema_ref: top_ref_name,
+            example,
+        })
+    })
+}
+
+pub fn get_endpoint_detail(
+    api: &openapiv3::OpenAPI,
+    method: &str,
+    path: &str,
+    expand: bool,
+) -> Option<Endpoint> {
+    // 1. Find path item
+    let path_item = resolve_path_item(api, path)?;
+
+    // 2. Get operation by method
+    let operation = resolve_operation(path_item, method)?;
+
+    // 3. Merge parameters
+    let parameters = merge_parameters(api, path_item, operation);
+
+    // 4. Request body
+    let request_body = extract_request_body(api, operation, expand);
+
+    // 5. Responses
+    let responses = extract_responses(operation);
+
+    // 6. Security schemes
+    let security_schemes = extract_security(api, operation);
+
+    // 7. Drill deeper hints
+    let mut seen = std::collections::HashSet::new();
+    let mut drill_deeper = Vec::new();
+
+    // 2xx response schema refs only
+    for resp in &responses {
+        if resp.status_code.starts_with('2') {
+            if let Some(ref name) = resp.schema_ref {
+                if seen.insert(name.clone()) {
+                    drill_deeper.push(format!("phyllotaxis schemas {}", name));
+                }
+            }
+        }
+    }
+
+    // Request body: oneOf/anyOf options OR concrete schema ref
+    if let Some(ref body) = request_body {
+        if !body.options.is_empty() {
+            for name in &body.options {
+                if seen.insert(name.clone()) {
+                    drill_deeper.push(format!("phyllotaxis schemas {}", name));
+                }
+            }
+        } else if let Some(ref name) = body.schema_ref {
+            if seen.insert(name.clone()) {
+                drill_deeper.push(format!("phyllotaxis schemas {}", name));
+            }
+        }
+    }
+
+    Some(Endpoint {
+        method: method.to_uppercase(),
+        path: path.to_string(),
+        summary: operation.summary.clone(),
+        description: operation.description.clone(),
+        is_deprecated: operation.deprecated,
+        is_alpha: matches!(
+            operation.extensions.get("x-alpha"),
+            Some(serde_json::Value::Bool(true))
+        ),
+        external_docs: None,
+        parameters,
+        request_body,
+        responses,
+        security_schemes,
+        drill_deeper,
+    })
+}
+
+fn extract_param_schema_info(
+    api: &openapiv3::OpenAPI,
+    format: &openapiv3::ParameterSchemaOrContent,
+) -> (String, Option<String>, Vec<String>) {
+    let schema_ref = match format {
+        openapiv3::ParameterSchemaOrContent::Schema(s) => s,
+        _ => return ("string".to_string(), None, Vec::new()),
+    };
+
+    let (schema, _name) = match schema_ref {
+        openapiv3::ReferenceOr::Item(s) => (s as &openapiv3::Schema, None),
+        openapiv3::ReferenceOr::Reference { reference } => {
+            match spec::schema_name_from_ref(reference) {
+                Some(sname) => {
+                    match api
+                        .components
+                        .as_ref()
+                        .and_then(|c| c.schemas.get(sname))
+                    {
+                        Some(openapiv3::ReferenceOr::Item(s)) => (s as &openapiv3::Schema, Some(sname)),
+                        _ => return (sname.to_string(), None, Vec::new()),
+                    }
+                }
+                None => return ("string".to_string(), None, Vec::new()),
+            }
+        }
+    };
+
+    let type_str = format_type_display(&schema.schema_kind);
+    let enum_values = extract_enum_values(&schema.schema_kind);
+
+    // Extract format
+    let fmt = match &schema.schema_kind {
+        openapiv3::SchemaKind::Type(openapiv3::Type::String(s)) => match &s.format {
+            openapiv3::VariantOrUnknownOrEmpty::Item(f) => Some(format_variant_name(f)),
+            openapiv3::VariantOrUnknownOrEmpty::Unknown(s) => Some(s.clone()),
+            openapiv3::VariantOrUnknownOrEmpty::Empty => None,
+        },
+        _ => None,
+    };
+
+    (type_str, fmt, enum_values)
+}
+
+pub fn suggest_similar<'a>(groups: &'a [ResourceGroup], slug: &str) -> Vec<&'a str> {
+    let slug_lower = slug.to_lowercase();
+    groups
+        .iter()
+        .filter(|g| strsim::jaro_winkler(&slug_lower, &g.slug.to_lowercase()) > 0.8)
+        .take(3)
+        .map(|g| g.slug.as_str())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load_petstore() -> openapiv3::OpenAPI {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let content =
+            std::fs::read_to_string(manifest_dir.join("tests/fixtures/petstore.yaml")).unwrap();
+        serde_yaml_ng::from_str(&content).unwrap()
+    }
+
+    #[test]
+    fn test_extract_petstore_groups() {
+        let api = load_petstore();
+        let groups = extract_resource_groups(&api);
+
+        let slugs: Vec<&str> = groups.iter().map(|g| g.slug.as_str()).collect();
+        assert!(
+            slugs.contains(&"pets"),
+            "Expected 'pets' group, got: {:?}",
+            slugs
+        );
+        assert!(
+            slugs.contains(&"deprecated-pets"),
+            "Expected 'deprecated-pets' group"
+        );
+        assert!(
+            slugs.contains(&"experimental"),
+            "Expected 'experimental' group"
+        );
+
+        // Check deprecated flag
+        let deprecated = groups.iter().find(|g| g.slug == "deprecated-pets").unwrap();
+        assert!(deprecated.is_deprecated);
+
+        // Check alpha flag
+        let alpha = groups.iter().find(|g| g.slug == "experimental").unwrap();
+        assert!(alpha.is_alpha);
+
+        // Pets group should have 5 endpoints (4 original + /animals POST)
+        let pets = groups.iter().find(|g| g.slug == "pets").unwrap();
+        assert_eq!(pets.endpoints.len(), 5, "Expected 5 endpoints in pets group");
+    }
+
+    #[test]
+    fn test_get_endpoint_detail_post_pets() {
+        let api = load_petstore();
+        let endpoint = get_endpoint_detail(&api, "POST", "/pets", false);
+        assert!(endpoint.is_some(), "Expected POST /pets endpoint");
+        let ep = endpoint.unwrap();
+
+        assert_eq!(ep.method, "POST");
+        assert_eq!(ep.path, "/pets");
+        assert!(
+            ep.request_body.is_some(),
+            "POST /pets should have request body"
+        );
+        assert!(
+            !ep.security_schemes.is_empty(),
+            "POST /pets should have security"
+        );
+        assert!(
+            ep.responses.iter().any(|r| r.status_code == "201"),
+            "Expected 201 response"
+        );
+        assert!(
+            ep.responses.iter().any(|r| r.status_code == "400"),
+            "Expected 400 error response"
+        );
+    }
+
+    #[test]
+    fn test_get_endpoint_detail_not_found() {
+        let api = load_petstore();
+        let result = get_endpoint_detail(&api, "DELETE", "/nonexistent", false);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_build_fields_allof() {
+        let api = load_petstore();
+
+        let petlist_schema = api
+            .components
+            .as_ref()
+            .unwrap()
+            .schemas
+            .get("PetList")
+            .unwrap();
+        let petlist_schema = match petlist_schema {
+            openapiv3::ReferenceOr::Item(s) => s,
+            _ => panic!("Expected item"),
+        };
+
+        let fields = build_fields(&api, petlist_schema, &[]);
+
+        let field_names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            field_names.contains(&"id"),
+            "Expected id from Pet: {:?}",
+            field_names
+        );
+        assert!(field_names.contains(&"name"), "Expected name from Pet");
+        assert!(field_names.contains(&"tags"), "Expected tags from PetList");
+    }
+
+    fn make_group(slug: &str) -> ResourceGroup {
+        ResourceGroup {
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            description: None,
+            is_deprecated: false,
+            is_alpha: false,
+            endpoints: vec![],
+        }
+    }
+
+    #[test]
+    fn test_find_group_exact() {
+        let groups = vec![make_group("pets"), make_group("owners")];
+        assert_eq!(find_resource_group(&groups, "pets"), Some(0));
+        assert_eq!(find_resource_group(&groups, "PETS"), Some(0));
+        assert_eq!(find_resource_group(&groups, "owners"), Some(1));
+    }
+
+    #[test]
+    fn test_get_resource_detail_pets() {
+        let api = load_petstore();
+        let group = get_resource_detail(&api, "pets");
+        assert!(group.is_some(), "Expected to find 'pets' group");
+        let group = group.unwrap();
+
+        let get_pets = group
+            .endpoints
+            .iter()
+            .find(|e| e.method == "GET" && e.path == "/pets");
+        assert!(get_pets.is_some(), "Expected GET /pets endpoint");
+        assert_eq!(
+            get_pets.unwrap().summary.as_deref(),
+            Some("List all pets"),
+            "Expected summary to be populated"
+        );
+    }
+
+    #[test]
+    fn test_build_fields_pet() {
+        let api = load_petstore();
+
+        let pet_schema = api
+            .components
+            .as_ref()
+            .unwrap()
+            .schemas
+            .get("Pet")
+            .unwrap();
+        let pet_schema = match pet_schema {
+            openapiv3::ReferenceOr::Item(s) => s,
+            _ => panic!("Expected item"),
+        };
+
+        let required = vec!["id".to_string(), "name".to_string()];
+        let fields = build_fields(&api, pet_schema, &required);
+
+        // id: string/uuid, read_only, required
+        let id_field = fields.iter().find(|f| f.name == "id").expect("id field");
+        assert_eq!(id_field.type_display, "string/uuid");
+        assert!(id_field.read_only, "id should be read_only");
+        assert!(id_field.required, "id should be required");
+
+        // name: string, required
+        let name_field = fields.iter().find(|f| f.name == "name").expect("name field");
+        assert_eq!(name_field.type_display, "string");
+        assert!(name_field.required);
+
+        // status: string with enum
+        let status_field = fields.iter().find(|f| f.name == "status").expect("status field");
+        assert!(
+            !status_field.enum_values.is_empty(),
+            "status should have enum values"
+        );
+        assert!(status_field.enum_values.contains(&"available".to_string()));
+
+        // nickname: nullable
+        let nickname_field = fields
+            .iter()
+            .find(|f| f.name == "nickname")
+            .expect("nickname field");
+        assert!(nickname_field.nullable, "nickname should be nullable");
+
+        // owner: ref to Owner
+        let owner_field = fields.iter().find(|f| f.name == "owner").expect("owner field");
+        assert_eq!(owner_field.type_display, "Owner");
+        assert_eq!(
+            owner_field.nested_schema_name.as_deref(),
+            Some("Owner")
+        );
+    }
+
+    #[test]
+    fn test_find_group_not_found() {
+        let groups = vec![make_group("pets")];
+        assert_eq!(find_resource_group(&groups, "widgets"), None);
+    }
+
+    // ─── Task 4.1: Jaro-Winkler suggestion tests ───
+
+    #[test]
+    fn test_suggest_similar_transposition() {
+        // "ptes" is a transposition of "pets" — contains() misses this
+        let groups = vec![make_group("pets"), make_group("owners")];
+        let suggestions = suggest_similar(&groups, "ptes");
+        assert!(
+            suggestions.contains(&"pets"),
+            "Jaro-Winkler should suggest 'pets' for transposition typo 'ptes', got: {:?}",
+            suggestions
+        );
+    }
+
+    #[test]
+    fn test_suggest_similar_extra_char() {
+        // "petss" has an extra char — contains() misses this because "pets".contains("petss") is false
+        let groups = vec![make_group("pets"), make_group("owners")];
+        let suggestions = suggest_similar(&groups, "petss");
+        assert!(
+            suggestions.contains(&"pets"),
+            "Jaro-Winkler should suggest 'pets' for near-match 'petss', got: {:?}",
+            suggestions
+        );
+    }
+
+    #[test]
+    fn test_suggest_similar_no_false_positive() {
+        // "xyz" should not match "pets" — very different strings
+        let groups = vec![make_group("pets"), make_group("owners")];
+        let suggestions = suggest_similar(&groups, "xyz");
+        assert!(
+            !suggestions.contains(&"pets"),
+            "Jaro-Winkler must not suggest 'pets' for completely different input 'xyz'"
+        );
+    }
+
+    #[test]
+    fn test_oneof_request_body_surfaces_options() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "POST", "/animals", false)
+            .expect("Expected POST /animals endpoint");
+        let body = ep.request_body.expect("Expected request body");
+        assert!(body.fields.is_empty(), "OneOf body should have no fields");
+        assert!(!body.options.is_empty(), "OneOf body should have options");
+        assert!(body.options.contains(&"Pet".to_string()), "Expected Pet option");
+        assert!(body.options.contains(&"Owner".to_string()), "Expected Owner option");
+    }
+
+    #[test]
+    fn test_expand_endpoint_request_body() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", true)
+            .expect("Expected POST /pets endpoint");
+        let body = ep.request_body.expect("Expected request body");
+        // With expand, the owner field should have nested fields inlined
+        let owner_field = body.fields.iter().find(|f| f.name == "owner");
+        assert!(owner_field.is_some(), "Expected owner field");
+        assert!(
+            !owner_field.unwrap().nested_fields.is_empty(),
+            "With expand, owner should have nested fields"
+        );
+    }
+
+    #[test]
+    fn test_pascal_case_display_name() {
+        let api = load_petstore();
+        let groups = extract_resource_groups(&api);
+        let pascal = groups
+            .iter()
+            .find(|g| g.slug == "pascal-case-resource")
+            .expect("Expected pascal-case-resource group");
+        assert_eq!(
+            pascal.display_name, "Pascal Case Resource",
+            "PascalCaseResource tag should humanize to 'Pascal Case Resource'"
+        );
+    }
+
+    #[test]
+    fn test_resolve_path_item_found() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let result = resolve_path_item(&api.api, "/pets");
+        assert!(result.is_some(), "expected /pets to resolve to a path item");
+    }
+
+    #[test]
+    fn test_resolve_path_item_missing() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let result = resolve_path_item(&api.api, "/does-not-exist");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_operation_known_method() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        assert!(resolve_operation(path_item, "GET").is_some());
+        assert!(resolve_operation(path_item, "get").is_some(), "should be case-insensitive");
+    }
+
+    #[test]
+    fn test_resolve_operation_unknown_method() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        assert!(resolve_operation(path_item, "CONNECT").is_none());
+    }
+
+    #[test]
+    fn test_extract_security_returns_vec() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        let operation = resolve_operation(path_item, "GET").unwrap();
+        // Just verify it runs without panic and returns a Vec (content depends on fixture)
+        let _security = extract_security(&api.api, operation);
+    }
+
+    #[test]
+    fn test_resolve_operation_absent_method() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        // /pets only defines GET and POST; DELETE exists only on /pets/{id}
+        assert!(resolve_operation(path_item, "DELETE").is_none());
+    }
+
+    #[test]
+    fn test_extract_responses_nonempty() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        let operation = resolve_operation(path_item, "GET").unwrap();
+        let responses = extract_responses(operation);
+        assert!(!responses.is_empty(), "GET /pets should have at least one response");
+    }
+
+    #[test]
+    fn test_extract_responses_status_codes_are_strings() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        let operation = resolve_operation(path_item, "GET").unwrap();
+        let responses = extract_responses(operation);
+        for r in &responses {
+            assert!(!r.status_code.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_merge_parameters_nonempty_for_parameterized_path() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        // /pets/{id} has a path-level 'id' parameter with GET operation
+        let path_item = resolve_path_item(&api.api, "/pets/{id}").unwrap();
+        let operation = resolve_operation(path_item, "GET").unwrap();
+        let params = merge_parameters(&api.api, path_item, operation);
+        assert!(!params.is_empty(), "parameterized endpoint should have parameters");
+    }
+
+    #[test]
+    fn test_merge_parameters_runs_for_simple_path() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        let operation = resolve_operation(path_item, "GET").unwrap();
+        let params = merge_parameters(&api.api, path_item, operation);
+        let _ = params; // just verify it doesn't panic
+    }
+
+    #[test]
+    fn test_extract_request_body_post_has_body() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        // POST /pets has a requestBody with application/json schema $ref: Pet
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        let operation = resolve_operation(path_item, "POST").unwrap();
+        let body = extract_request_body(&api.api, operation, false);
+        assert!(body.is_some(), "POST /pets should have a request body");
+    }
+
+    #[test]
+    fn test_extract_request_body_get_is_none() {
+        let api = crate::spec::load_spec(
+            Some("tests/fixtures/petstore.yaml"),
+            &std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let path_item = resolve_path_item(&api.api, "/pets").unwrap();
+        let operation = resolve_operation(path_item, "GET").unwrap();
+        let body = extract_request_body(&api.api, operation, false);
+        assert!(body.is_none(), "GET should have no request body");
+    }
+
+    #[test]
+    fn test_drill_deeper_2xx_response_schema() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "GET", "/pets/{id}", false).unwrap();
+        assert!(
+            ep.drill_deeper.contains(&"phyllotaxis schemas Pet".to_string()),
+            "GET /pets/{{petId}} 200 response should yield drill_deeper for Pet, got: {:?}",
+            ep.drill_deeper
+        );
+    }
+
+    #[test]
+    fn test_drill_deeper_excludes_error_responses() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", false).unwrap();
+        // POST /pets has 201 → Pet, 400 → no schema, 409 → no schema
+        assert!(
+            ep.drill_deeper.contains(&"phyllotaxis schemas Pet".to_string()),
+            "Should include Pet from 201 response"
+        );
+        // Error responses should not contribute extra entries
+        assert_eq!(
+            ep.drill_deeper.iter().filter(|d| d.contains("Pet")).count(),
+            1,
+            "Pet should appear exactly once"
+        );
+    }
+
+    #[test]
+    fn test_drill_deeper_empty_when_no_schemas() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "DELETE", "/pets/{id}", false).unwrap();
+        assert!(
+            ep.drill_deeper.is_empty(),
+            "DELETE /pets/{{petId}} (204 no content) should have empty drill_deeper, got: {:?}",
+            ep.drill_deeper
+        );
+    }
+
+    #[test]
+    fn test_drill_deeper_deduplication() {
+        // POST /pets: 201 response has Pet schema_ref, request body also refs Pet
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", false).unwrap();
+        let pet_count = ep.drill_deeper.iter().filter(|d| d.contains("Pet")).count();
+        assert_eq!(
+            pet_count, 1,
+            "Pet should be deduplicated across response and request body, got: {:?}",
+            ep.drill_deeper
+        );
+    }
+
+    #[test]
+    fn test_request_body_schema_ref_concrete() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", false).unwrap();
+        let body = ep.request_body.as_ref().unwrap();
+        assert_eq!(
+            body.schema_ref,
+            Some("Pet".to_string()),
+            "POST /pets request body should have schema_ref = Pet"
+        );
+    }
+}
