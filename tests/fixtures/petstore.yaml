@@ -1,0 +1,232 @@
+openapi: "3.0.4"
+info:
+  title: Petstore API
+  version: "1.0.0"
+  description: A simple petstore for testing phyllotaxis.
+servers:
+  - url: "https://{env}.example.com"
+    variables:
+      env:
+        default: prod
+        description: Environment name
+tags:
+  - name: Pets
+    description: Pet management
+  - name: "Deprecated Pets (Deprecated)"
+    description: Old pet endpoints
+  - name: "Experimental (Alpha)"
+    description: Alpha feature endpoints
+  - name: PascalCaseResource
+    description: A resource with a PascalCase tag name
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique identifier
+        name:
+          type: string
+          description: Pet name
+          example: Fido
+        status:
+          type: string
+          enum: [available, pending, sold]
+          description: Pet availability status
+        nickname:
+          type: string
+          nullable: true
+          description: Optional nickname, can be cleared with null
+        owner:
+          $ref: '#/components/schemas/Owner'
+    Owner:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Owner identifier
+        name:
+          type: string
+          description: Owner name
+    PetList:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          properties:
+            tags:
+              type: array
+              items:
+                type: string
+              description: Classification tags
+    PetStatus:
+      type: string
+      enum: [available, pending, sold]
+      description: Availability status of a pet
+    PetOrOwner:
+      oneOf:
+        - $ref: '#/components/schemas/Pet'
+        - $ref: '#/components/schemas/Owner'
+      discriminator:
+        propertyName: type
+        mapping:
+          pet: '#/components/schemas/Pet'
+          owner: '#/components/schemas/Owner'
+security:
+  - bearerAuth: []
+paths:
+  /pets:
+    get:
+      tags: [Pets]
+      summary: List all pets
+      description: Returns a list of all pets in the store, optionally filtered by status.
+      operationId: listPets
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [available, pending, sold]
+          description: Filter by status
+        - name: limit
+          in: query
+          schema:
+            type: integer
+          description: Maximum number of results
+      responses:
+        "200":
+          description: A list of pets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+    post:
+      tags: [Pets]
+      summary: Create a pet
+      operationId: createPet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pet'
+            example:
+              name: Fido
+              status: available
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+              example:
+                id: "abc-123"
+                name: Fido
+                status: available
+        "400":
+          description: Invalid input
+        "409":
+          description: Pet with this name already exists
+  /pets/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: Pet identifier
+    get:
+      tags: [Pets]
+      summary: Get a pet by ID
+      operationId: getPet
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        "404":
+          description: Pet not found
+    delete:
+      tags: [Pets]
+      summary: Delete a pet
+      deprecated: true
+      operationId: deletePet
+      responses:
+        "204":
+          description: Deleted
+  /old-pets:
+    get:
+      tags: ["Deprecated Pets (Deprecated)"]
+      summary: Old pet listing
+      deprecated: true
+      operationId: listOldPets
+      responses:
+        "200":
+          description: Old list
+  /pets/search:
+    get:
+      tags: ["Experimental (Alpha)"]
+      summary: Fuzzy search pets
+      operationId: searchPets
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Search query
+        - name: filter
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter expression for narrowing results
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PetOrOwner'
+  /animals:
+    post:
+      tags: [Pets]
+      summary: Create a pet or owner
+      operationId: createAnimal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/Pet'
+                - $ref: '#/components/schemas/Owner'
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Invalid input
+  /pascal-resource:
+    get:
+      tags: [PascalCaseResource]
+      summary: List pascal resources
+      operationId: listPascalResources
+      responses:
+        "200":
+          description: A list of resources
