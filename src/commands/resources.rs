@@ -65,6 +65,8 @@ pub fn extract_resource_groups(api: &openapiv3::OpenAPI) -> Vec<ResourceGroup> {
                 request_body: None,
                 responses: Vec::new(),
                 security_schemes: Vec::new(),
+                callbacks: Vec::new(),
+                links: Vec::new(),
                 drill_deeper: Vec::new(),
             };
 
@@ -211,8 +213,11 @@ pub fn build_fields(
             optional: !required_fields.contains(name),
             nullable: resolved.schema_data.nullable,
             read_only: resolved.schema_data.read_only,
+            write_only: resolved.schema_data.write_only,
+            deprecated: resolved.schema_data.deprecated,
             description: resolved.schema_data.description.clone(),
             enum_values,
+            constraints: extract_constraints(&resolved.schema_kind),
             default_value: resolved.schema_data.default.clone(),
             example: resolved.schema_data.example.clone(),
             nested_schema_name: schema_name.map(|s| s.to_string()),
@@ -223,11 +228,58 @@ pub fn build_fields(
     fields
 }
 
+fn extract_constraints(kind: &openapiv3::SchemaKind) -> Vec<String> {
+    let mut c = Vec::new();
+    match kind {
+        openapiv3::SchemaKind::Type(openapiv3::Type::String(s)) => {
+            if let Some(min) = s.min_length { c.push(format!("min:{}", min)); }
+            if let Some(max) = s.max_length { c.push(format!("max:{}", max)); }
+            if let Some(ref pat) = s.pattern { c.push(format!("pattern:{}", pat)); }
+        }
+        openapiv3::SchemaKind::Type(openapiv3::Type::Integer(i)) => {
+            if let Some(min) = i.minimum {
+                if i.exclusive_minimum { c.push(format!(">{}", min)); }
+                else { c.push(format!("min:{}", min)); }
+            }
+            if let Some(max) = i.maximum {
+                if i.exclusive_maximum { c.push(format!("<{}", max)); }
+                else { c.push(format!("max:{}", max)); }
+            }
+            if let Some(mo) = i.multiple_of { c.push(format!("multipleOf:{}", mo)); }
+        }
+        openapiv3::SchemaKind::Type(openapiv3::Type::Number(n)) => {
+            if let Some(min) = n.minimum {
+                if n.exclusive_minimum { c.push(format!(">{}", min)); }
+                else { c.push(format!("min:{}", min)); }
+            }
+            if let Some(max) = n.maximum {
+                if n.exclusive_maximum { c.push(format!("<{}", max)); }
+                else { c.push(format!("max:{}", max)); }
+            }
+            if let Some(mo) = n.multiple_of { c.push(format!("multipleOf:{}", mo)); }
+        }
+        openapiv3::SchemaKind::Type(openapiv3::Type::Array(a)) => {
+            if let Some(min) = a.min_items { c.push(format!("minItems:{}", min)); }
+            if let Some(max) = a.max_items { c.push(format!("maxItems:{}", max)); }
+            if a.unique_items { c.push("uniqueItems".to_string()); }
+        }
+        openapiv3::SchemaKind::Type(openapiv3::Type::Object(o)) => {
+            if let Some(min) = o.min_properties { c.push(format!("minProperties:{}", min)); }
+            if let Some(max) = o.max_properties { c.push(format!("maxProperties:{}", max)); }
+        }
+        _ => {}
+    }
+    c
+}
+
 fn format_type_display(kind: &openapiv3::SchemaKind) -> String {
     match kind {
         openapiv3::SchemaKind::Type(t) => match t {
             openapiv3::Type::String(s) => {
                 match &s.format {
+                    openapiv3::VariantOrUnknownOrEmpty::Item(openapiv3::StringFormat::Binary) => {
+                        "binary".to_string()
+                    }
                     openapiv3::VariantOrUnknownOrEmpty::Item(fmt) => {
                         format!("string/{}", format_variant_name(fmt))
                     }
@@ -246,7 +298,11 @@ fn format_type_display(kind: &openapiv3::SchemaKind) -> String {
                         spec::schema_name_from_ref(reference.as_str()).unwrap_or("object");
                     format!("{}[]", name)
                 }
-                _ => "array".to_string(),
+                Some(openapiv3::ReferenceOr::Item(boxed)) => {
+                    let item_type = format_type_display(&boxed.schema_kind);
+                    format!("{}[]", item_type)
+                }
+                None => "array".to_string(),
             },
             openapiv3::Type::Object(_) => "object".to_string(),
         },
@@ -278,6 +334,18 @@ fn extract_enum_values(kind: &openapiv3::SchemaKind) -> Vec<String> {
             .enumeration
             .iter()
             .filter_map(|v| v.clone())
+            .collect(),
+        openapiv3::SchemaKind::Type(openapiv3::Type::Integer(i)) => i
+            .enumeration
+            .iter()
+            .filter_map(|v| v.map(|n| n.to_string()))
+            .collect(),
+        openapiv3::SchemaKind::Type(openapiv3::Type::Number(n)) => n
+            .enumeration
+            .iter()
+            .filter_map(|v| v.map(|f| {
+                if f.fract() == 0.0 { format!("{}", f as i64) } else { format!("{}", f) }
+            }))
             .collect(),
         _ => Vec::new(),
     }
@@ -326,8 +394,84 @@ fn extract_security(
         .unwrap_or_default()
 }
 
-fn extract_responses(operation: &openapiv3::Operation) -> Vec<crate::models::resource::Response> {
-    use crate::models::resource::Response;
+fn extract_links_from_response(
+    api: &openapiv3::OpenAPI,
+    resp: &openapiv3::Response,
+) -> Vec<crate::models::resource::ResponseLink> {
+    use crate::models::resource::ResponseLink;
+
+    resp.links
+        .iter()
+        .filter_map(|(link_name, link_ref)| {
+            let link = match link_ref {
+                openapiv3::ReferenceOr::Item(l) => l,
+                openapiv3::ReferenceOr::Reference { .. } => return None,
+            };
+
+            let operation_id = match &link.operation {
+                openapiv3::LinkOperation::OperationId(id) => id.clone(),
+                openapiv3::LinkOperation::OperationRef(_) => return None,
+            };
+
+            let parameters: Vec<String> = link
+                .parameters
+                .iter()
+                .map(|(k, v)| {
+                    let val_str = match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    format!("{} = {}", k, val_str)
+                })
+                .collect();
+
+            let drill_command = build_link_drill_command(api, &operation_id);
+
+            Some(ResponseLink {
+                name: link_name.clone(),
+                operation_id,
+                parameters,
+                description: link.description.clone(),
+                drill_command,
+            })
+        })
+        .collect()
+}
+
+fn build_link_drill_command(
+    api: &openapiv3::OpenAPI,
+    operation_id: &str,
+) -> Option<String> {
+    for (path_str, path_item_ref) in &api.paths.paths {
+        let path_item = match path_item_ref {
+            openapiv3::ReferenceOr::Item(item) => item,
+            _ => continue,
+        };
+        let methods: &[(&str, &Option<openapiv3::Operation>)] = &[
+            ("GET", &path_item.get), ("POST", &path_item.post), ("PUT", &path_item.put),
+            ("DELETE", &path_item.delete), ("PATCH", &path_item.patch),
+        ];
+        for &(method, op_opt) in methods {
+            if let Some(op) = op_opt {
+                if op.operation_id.as_deref() == Some(operation_id) {
+                    let slug = op.tags.first().map(|t| {
+                        crate::models::resource::slugify(t)
+                    });
+                    if let Some(slug) = slug {
+                        return Some(format!(
+                            "phyllotaxis resources {} {} {}",
+                            slug, method, path_str
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation) -> Vec<crate::models::resource::Response> {
+    use crate::models::resource::{Response, ResponseHeader};
     let mut responses = Vec::new();
     for (status, resp_ref) in &operation.responses.responses {
         let status_code = match status {
@@ -354,11 +498,44 @@ fn extract_responses(operation: &openapiv3::Operation) -> Vec<crate::models::res
             })
             .unwrap_or((None, None));
 
+        let headers: Vec<ResponseHeader> = resp
+            .headers
+            .iter()
+            .filter_map(|(name, href)| {
+                let header = match href {
+                    openapiv3::ReferenceOr::Item(h) => h,
+                    openapiv3::ReferenceOr::Reference { .. } => return None,
+                };
+                let type_display = match &header.format {
+                    openapiv3::ParameterSchemaOrContent::Schema(s) => match s {
+                        openapiv3::ReferenceOr::Item(schema) => {
+                            format_type_display(&schema.schema_kind)
+                        }
+                        openapiv3::ReferenceOr::Reference { reference } => {
+                            spec::schema_name_from_ref(reference)
+                                .unwrap_or("object")
+                                .to_string()
+                        }
+                    },
+                    _ => "string".to_string(),
+                };
+                Some(ResponseHeader {
+                    name: name.clone(),
+                    type_display,
+                    description: header.description.clone(),
+                })
+            })
+            .collect();
+
+        let links = extract_links_from_response(api, resp);
+
         responses.push(Response {
             status_code,
             description: resp.description.clone(),
             schema_ref: schema_ref_name,
             example,
+            headers,
+            links,
         });
     }
     responses
@@ -428,78 +605,90 @@ fn extract_request_body(
 ) -> Option<crate::models::resource::RequestBody> {
     use crate::models::resource::RequestBody;
 
-    operation.request_body.as_ref().and_then(|rb_ref| {
-        let rb = match rb_ref {
-            openapiv3::ReferenceOr::Item(rb) => rb,
-            openapiv3::ReferenceOr::Reference { .. } => return None,
-        };
+    let rb_ref = operation.request_body.as_ref()?;
+    let rb = match rb_ref {
+        openapiv3::ReferenceOr::Item(rb) => rb,
+        openapiv3::ReferenceOr::Reference { .. } => return None,
+    };
 
-        let media = rb.content.get("application/json")?;
-        let schema_ref = media.schema.as_ref()?;
+    // Priority order: JSON first (existing behavior), then multipart, then form-encoded, then any
+    let priority = [
+        "application/json",
+        "multipart/form-data",
+        "application/x-www-form-urlencoded",
+    ];
 
-        let (schema, top_ref_name): (&openapiv3::Schema, Option<String>) = match schema_ref {
-            openapiv3::ReferenceOr::Item(s) => (s, None),
-            openapiv3::ReferenceOr::Reference { reference } => {
-                let sname = spec::schema_name_from_ref(reference)?;
-                let components = api.components.as_ref()?;
-                match components.schemas.get(sname)? {
-                    openapiv3::ReferenceOr::Item(s) => (s, Some(sname.to_string())),
-                    _ => return None,
-                }
+    let (content_type, media) = priority
+        .iter()
+        .find_map(|ct| rb.content.get(*ct).map(|m| (*ct, m)))
+        .or_else(|| rb.content.iter().next().map(|(ct, m)| (ct.as_str(), m)))?;
+
+    // NOTE: multipart/form-data per-field encoding overrides (media.encoding) are intentionally
+    // not extracted. They describe wire-level content type, not the field's logical schema type.
+
+    let schema_ref = media.schema.as_ref()?;
+
+    let (schema, top_ref_name): (&openapiv3::Schema, Option<String>) = match schema_ref {
+        openapiv3::ReferenceOr::Item(s) => (s, None),
+        openapiv3::ReferenceOr::Reference { reference } => {
+            let sname = spec::schema_name_from_ref(reference)?;
+            let components = api.components.as_ref()?;
+            match components.schemas.get(sname)? {
+                openapiv3::ReferenceOr::Item(s) => (s, Some(sname.to_string())),
+                _ => return None,
             }
-        };
-
-        let example = media.example.clone();
-
-        // OneOf/AnyOf request body: surface variant names instead of empty fields
-        let oneof_variants: &[openapiv3::ReferenceOr<openapiv3::Schema>] = match &schema.schema_kind {
-            openapiv3::SchemaKind::OneOf { one_of } => one_of.as_slice(),
-            openapiv3::SchemaKind::AnyOf { any_of } => any_of.as_slice(),
-            _ => &[],
-        };
-        let options: Vec<String> = oneof_variants
-            .iter()
-            .filter_map(|r| match r {
-                openapiv3::ReferenceOr::Reference { reference } => {
-                    spec::schema_name_from_ref(reference).map(|s| s.to_string())
-                }
-                _ => None,
-            })
-            .collect();
-
-        if !options.is_empty() {
-            return Some(RequestBody {
-                content_type: "application/json".to_string(),
-                fields: Vec::new(),
-                options,
-                schema_ref: None,
-                example,
-            });
         }
+    };
 
-        let required: Vec<String> =
-            if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) = &schema.schema_kind
-            {
-                obj.required.clone()
-            } else {
-                vec![]
-            };
+    let example = media.example.clone();
 
-        let mut fields = build_fields(api, schema, &required);
-
-        if expand {
-            use crate::commands::schemas::expand_fields_pub;
-            let mut visited = std::collections::HashSet::new();
-            fields = expand_fields_pub(api, fields, &mut visited, 1, 5);
-        }
-
-        Some(RequestBody {
-            content_type: "application/json".to_string(),
-            fields,
-            options: Vec::new(),
-            schema_ref: top_ref_name,
-            example,
+    // OneOf/AnyOf request body: surface variant names instead of empty fields
+    let oneof_variants: &[openapiv3::ReferenceOr<openapiv3::Schema>] = match &schema.schema_kind {
+        openapiv3::SchemaKind::OneOf { one_of } => one_of.as_slice(),
+        openapiv3::SchemaKind::AnyOf { any_of } => any_of.as_slice(),
+        _ => &[],
+    };
+    let options: Vec<String> = oneof_variants
+        .iter()
+        .filter_map(|r| match r {
+            openapiv3::ReferenceOr::Reference { reference } => {
+                spec::schema_name_from_ref(reference).map(|s| s.to_string())
+            }
+            _ => None,
         })
+        .collect();
+
+    if !options.is_empty() {
+        return Some(RequestBody {
+            content_type: content_type.to_string(),
+            fields: Vec::new(),
+            options,
+            schema_ref: None,
+            example,
+        });
+    }
+
+    let required: Vec<String> =
+        if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) = &schema.schema_kind {
+            obj.required.clone()
+        } else {
+            vec![]
+        };
+
+    let mut fields = build_fields(api, schema, &required);
+
+    if expand {
+        use crate::commands::schemas::expand_fields_pub;
+        let mut visited = std::collections::HashSet::new();
+        fields = expand_fields_pub(api, fields, &mut visited, 1, 5);
+    }
+
+    Some(RequestBody {
+        content_type: content_type.to_string(),
+        fields,
+        options: Vec::new(),
+        schema_ref: top_ref_name,
+        example,
     })
 }
 
@@ -522,10 +711,13 @@ pub fn get_endpoint_detail(
     let request_body = extract_request_body(api, operation, expand);
 
     // 5. Responses
-    let responses = extract_responses(operation);
+    let responses = extract_responses(api, operation);
 
     // 6. Security schemes
     let security_schemes = extract_security(api, operation);
+
+    // 6b. Callbacks (extraction lives in commands/callbacks.rs)
+    let callbacks = crate::commands::callbacks::extract_callbacks_from_operation(operation, method, path);
 
     // 7. Drill deeper hints
     let mut seen = std::collections::HashSet::new();
@@ -557,6 +749,12 @@ pub fn get_endpoint_detail(
         }
     }
 
+    // 8. Aggregate links from all responses
+    let endpoint_links: Vec<crate::models::resource::ResponseLink> = responses
+        .iter()
+        .flat_map(|r| r.links.iter().cloned())
+        .collect();
+
     Some(Endpoint {
         method: method.to_uppercase(),
         path: path.to_string(),
@@ -572,6 +770,8 @@ pub fn get_endpoint_detail(
         request_body,
         responses,
         security_schemes,
+        callbacks,
+        links: endpoint_links,
         drill_deeper,
     })
 }
@@ -638,6 +838,13 @@ mod tests {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let content =
             std::fs::read_to_string(manifest_dir.join("tests/fixtures/petstore.yaml")).unwrap();
+        serde_yaml_ng::from_str(&content).unwrap()
+    }
+
+    fn load_kitchen_sink() -> openapiv3::OpenAPI {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let content =
+            std::fs::read_to_string(manifest_dir.join("tests/fixtures/kitchen-sink.yaml")).unwrap();
         serde_yaml_ng::from_str(&content).unwrap()
     }
 
@@ -991,7 +1198,7 @@ mod tests {
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
         let operation = resolve_operation(path_item, "GET").unwrap();
-        let responses = extract_responses(operation);
+        let responses = extract_responses(&api.api, operation);
         assert!(!responses.is_empty(), "GET /pets should have at least one response");
     }
 
@@ -1004,7 +1211,7 @@ mod tests {
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
         let operation = resolve_operation(path_item, "GET").unwrap();
-        let responses = extract_responses(operation);
+        let responses = extract_responses(&api.api, operation);
         for r in &responses {
             assert!(!r.status_code.is_empty());
         }
@@ -1126,5 +1333,167 @@ mod tests {
             Some("Pet".to_string()),
             "POST /pets request body should have schema_ref = Pet"
         );
+    }
+
+    #[test]
+    fn test_write_only_field_extraction() {
+        let api = load_kitchen_sink();
+        let schema = api.components.as_ref().unwrap().schemas.get("CreateUserRequest").unwrap();
+        let schema = match schema {
+            openapiv3::ReferenceOr::Item(s) => s,
+            _ => panic!("expected item"),
+        };
+        let fields = build_fields(&api, schema, &["username".to_string(), "email".to_string(), "password".to_string()]);
+        let password = fields.iter().find(|f| f.name == "password").expect("password field");
+        assert!(password.write_only, "password should be write_only");
+    }
+
+    #[test]
+    fn test_deprecated_field_extraction() {
+        let api = load_kitchen_sink();
+        let schema = api.components.as_ref().unwrap().schemas.get("PetBase").unwrap();
+        let schema = match schema {
+            openapiv3::ReferenceOr::Item(s) => s,
+            _ => panic!("expected item"),
+        };
+        let fields = build_fields(&api, schema, &[]);
+        let legacy = fields.iter().find(|f| f.name == "legacy_code").expect("legacy_code field");
+        assert!(legacy.deprecated, "legacy_code should be deprecated");
+    }
+
+    #[test]
+    fn test_constraints_string_minlength_maxlength_pattern() {
+        let api = load_kitchen_sink();
+        let schema = api.components.as_ref().unwrap().schemas.get("User").unwrap();
+        let schema = match schema { openapiv3::ReferenceOr::Item(s) => s, _ => panic!() };
+        let fields = build_fields(&api, schema, &[]);
+        let username = fields.iter().find(|f| f.name == "username").expect("username");
+        assert!(username.constraints.iter().any(|c| c.starts_with("min:")), "missing min: {:?}", username.constraints);
+        assert!(username.constraints.iter().any(|c| c.starts_with("max:")), "missing max: {:?}", username.constraints);
+        assert!(username.constraints.iter().any(|c| c.starts_with("pattern:")), "missing pattern: {:?}", username.constraints);
+    }
+
+    #[test]
+    fn test_constraints_integer() {
+        let api = load_kitchen_sink();
+        let schema = api.components.as_ref().unwrap().schemas.get("Settings").unwrap();
+        let schema = match schema { openapiv3::ReferenceOr::Item(s) => s, _ => panic!() };
+        let fields = build_fields(&api, schema, &[]);
+        let field = fields.iter().find(|f| f.name == "max_upload_size_mb").expect("max_upload_size_mb");
+        assert!(field.constraints.iter().any(|c| c.starts_with("min:")), "missing min: {:?}", field.constraints);
+        assert!(field.constraints.iter().any(|c| c.starts_with("max:")), "missing max: {:?}", field.constraints);
+        assert!(field.constraints.iter().any(|c| c.starts_with("multipleOf:")), "missing multipleOf: {:?}", field.constraints);
+    }
+
+    #[test]
+    fn test_constraints_array_unique_items() {
+        let api = load_kitchen_sink();
+        let schema = api.components.as_ref().unwrap().schemas.get("PetBase").unwrap();
+        let schema = match schema { openapiv3::ReferenceOr::Item(s) => s, _ => panic!() };
+        let fields = build_fields(&api, schema, &[]);
+        let tags = fields.iter().find(|f| f.name == "tags").expect("tags");
+        assert!(tags.constraints.iter().any(|c| c == "uniqueItems"), "missing uniqueItems: {:?}", tags.constraints);
+    }
+
+    #[test]
+    fn test_links_extracted_from_post_users() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "POST", "/users", false).unwrap();
+        let link_names: Vec<&str> = ep.links.iter().map(|l| l.name.as_str()).collect();
+        assert!(link_names.contains(&"GetCreatedUser"), "missing GetCreatedUser: {:?}", link_names);
+        assert!(link_names.contains(&"ListUserPets"), "missing ListUserPets: {:?}", link_names);
+        let get_user_link = ep.links.iter().find(|l| l.name == "GetCreatedUser").unwrap();
+        assert!(!get_user_link.parameters.is_empty(), "GetCreatedUser should have parameter mappings");
+        assert!(get_user_link.parameters.iter().any(|p| p.contains("userId")));
+    }
+
+    #[test]
+    fn test_link_drill_command_built() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "POST", "/users", false).unwrap();
+        let link = ep.links.iter().find(|l| l.name == "GetCreatedUser").unwrap();
+        assert!(
+            link.drill_command.as_ref().map(|c| c.contains("phyllotaxis resources")).unwrap_or(false),
+            "Expected drill command, got: {:?}", link.drill_command
+        );
+    }
+
+    #[test]
+    fn test_response_headers_extracted() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "GET", "/users", false).unwrap();
+        let ok_resp = ep.responses.iter().find(|r| r.status_code == "200").unwrap();
+        let header_names: Vec<&str> = ok_resp.headers.iter().map(|h| h.name.as_str()).collect();
+        assert!(
+            header_names.contains(&"X-Total-Count"),
+            "missing X-Total-Count: {:?}", header_names
+        );
+        assert!(
+            header_names.contains(&"X-Rate-Limit-Remaining"),
+            "missing X-Rate-Limit-Remaining: {:?}", header_names
+        );
+    }
+
+    #[test]
+    fn test_callbacks_extracted_inline() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "POST", "/notifications/subscribe", false).unwrap();
+        let cb_names: Vec<&str> = ep.callbacks.iter().map(|c| c.name.as_str()).collect();
+        assert!(cb_names.contains(&"onEvent"), "missing onEvent: {:?}", cb_names);
+        assert!(cb_names.contains(&"onStatusChange"), "missing onStatusChange: {:?}", cb_names);
+
+        let on_event = ep.callbacks.iter().find(|c| c.name == "onEvent").unwrap();
+        assert!(!on_event.operations.is_empty(), "onEvent should have operations");
+        let op = &on_event.operations[0];
+        assert_eq!(op.method, "POST");
+        assert!(op.url_expression.contains("callbackUrl"), "URL expression: {}", op.url_expression);
+        assert_eq!(op.body_schema.as_deref(), Some("EventPayload"),
+            "onEvent body should be EventPayload, got {:?}", op.body_schema);
+    }
+
+    #[test]
+    fn test_callback_responses_extracted() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "POST", "/notifications/subscribe", false).unwrap();
+        let on_event = ep.callbacks.iter().find(|c| c.name == "onEvent").unwrap();
+        let op = &on_event.operations[0];
+        let status_codes: Vec<&str> = op.responses.iter().map(|r| r.status_code.as_str()).collect();
+        assert!(status_codes.contains(&"200"), "missing 200: {:?}", status_codes);
+        assert!(status_codes.contains(&"410"), "missing 410: {:?}", status_codes);
+    }
+
+    // ─── Task 14: Multi-content-type request body ───
+
+    #[test]
+    fn test_multipart_request_body_extracted() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "POST", "/files/upload", false).unwrap();
+        let rb = ep.request_body.as_ref().expect("should have request body");
+        assert_eq!(rb.content_type, "multipart/form-data");
+        let field_names: Vec<&str> = rb.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(field_names.contains(&"file"), "missing 'file': {:?}", field_names);
+        assert!(field_names.contains(&"description"), "missing 'description': {:?}", field_names);
+    }
+
+    #[test]
+    fn test_multipart_binary_field_type() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "POST", "/files/upload", false).unwrap();
+        let rb = ep.request_body.as_ref().unwrap();
+        let file_field = rb.fields.iter().find(|f| f.name == "file").unwrap();
+        assert_eq!(
+            file_field.type_display, "binary",
+            "binary format should display as 'binary', not 'string/binary'"
+        );
+    }
+
+    #[test]
+    fn test_form_urlencoded_request_body() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "PUT", "/files/{fileId}/metadata", false).unwrap();
+        let rb = ep.request_body.as_ref().expect("should have request body");
+        assert_eq!(rb.content_type, "application/x-www-form-urlencoded");
+        let field_names: Vec<&str> = rb.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(field_names.contains(&"description"), "missing 'description': {:?}", field_names);
     }
 }

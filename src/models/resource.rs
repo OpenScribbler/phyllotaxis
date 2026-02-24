@@ -21,6 +21,9 @@ pub struct Endpoint {
     pub request_body: Option<RequestBody>,
     pub responses: Vec<Response>,
     pub security_schemes: Vec<String>,
+    pub callbacks: Vec<CallbackEntry>,
+    #[serde(skip_serializing)]
+    pub links: Vec<ResponseLink>,
     pub drill_deeper: Vec<String>,
 }
 
@@ -58,12 +61,54 @@ pub struct Response {
     pub description: String,
     pub schema_ref: Option<String>,
     pub example: Option<serde_json::Value>,
+    pub headers: Vec<ResponseHeader>,
+    pub links: Vec<ResponseLink>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ExternalDoc {
     pub url: String,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResponseHeader {
+    pub name: String,
+    pub type_display: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResponseLink {
+    pub name: String,
+    pub operation_id: String,
+    pub parameters: Vec<String>,
+    pub description: Option<String>,
+    pub drill_command: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CallbackResponse {
+    pub status_code: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CallbackOperation {
+    pub method: String,
+    pub url_expression: String,
+    pub summary: Option<String>,
+    pub body_schema: Option<String>,
+    pub responses: Vec<CallbackResponse>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CallbackEntry {
+    pub name: String,
+    pub defined_on_operation_id: Option<String>,
+    pub defined_on_method: String,
+    pub defined_on_path: String,
+    pub operations: Vec<CallbackOperation>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -74,8 +119,11 @@ pub struct Field {
     pub optional: bool,
     pub nullable: bool,
     pub read_only: bool,
+    pub write_only: bool,
+    pub deprecated: bool,
     pub description: Option<String>,
     pub enum_values: Vec<String>,
+    pub constraints: Vec<String>,
     pub default_value: Option<serde_json::Value>,
     pub example: Option<serde_json::Value>,
     pub nested_schema_name: Option<String>,

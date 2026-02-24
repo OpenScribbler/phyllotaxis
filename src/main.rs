@@ -45,6 +45,11 @@ enum Commands {
         /// Search term
         term: String,
     },
+    /// List all callbacks, or show detail for a specific callback
+    Callbacks {
+        /// Callback name to drill into
+        name: Option<String>,
+    },
     /// Interactive setup — detect spec and write config
     Init {
         /// Spec file path — skips interactive prompt when provided
@@ -248,6 +253,46 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 render::text::render_search(&results, is_tty)
             };
             println!("{}", output);
+        }
+        Some(Commands::Callbacks { name }) => {
+            let callbacks = commands::callbacks::list_all_callbacks(&loaded.api);
+            match name {
+                None => {
+                    let output = if cli.json {
+                        render::json::render_callback_list(&callbacks, is_tty)
+                    } else {
+                        render::text::render_callback_list(&callbacks, is_tty)
+                    };
+                    println!("{}", output);
+                }
+                Some(name) => {
+                    match commands::callbacks::find_callback(&loaded.api, name) {
+                        Some(cb) => {
+                            let output = if cli.json {
+                                render::json::render_callback_detail(&cb, is_tty)
+                            } else {
+                                render::text::render_callback_detail(&cb, is_tty)
+                            };
+                            println!("{}", output);
+                        }
+                        None => {
+                            if cli.json {
+                                eprintln!("{}", json_error(&format!("Callback '{}' not found.", name)));
+                            } else {
+                                eprintln!("Error: Callback '{}' not found.", name);
+                                let suggestions = commands::callbacks::suggest_similar_callbacks(&callbacks, name);
+                                if !suggestions.is_empty() {
+                                    eprintln!("Did you mean:");
+                                    for s in &suggestions {
+                                        eprintln!("  phyllotaxis callbacks {}", s);
+                                    }
+                                }
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
         }
         Some(Commands::Init { .. }) => unreachable!(),
         Some(Commands::Completions { .. }) => unreachable!(),

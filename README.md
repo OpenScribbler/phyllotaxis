@@ -1,17 +1,12 @@
-# Phyllotaxis
-
 ```
-        *
-       * *
-      *   *
-     *  *  *
-    * *   * *
-   *   * *   *
-  *  *     *  *
- * *   * *   * *
-*   * * * * *   *
+▄▄▄▄▄▄▄   ▄▄          ▄▄ ▄▄                                 
+███▀▀███▄ ██          ██ ██        ██              ▀▀       
+███▄▄███▀ ████▄ ██ ██ ██ ██ ▄███▄ ▀██▀▀ ▀▀█▄ ██ ██ ██  ▄█▀▀▀
+███▀▀▀▀   ██ ██ ██▄██ ██ ██ ██ ██  ██  ▄█▀██  ███  ██  ▀███▄
+███       ██ ██  ▀██▀ ██ ██ ▀███▀  ██  ▀█▄██ ██ ██ ██▄ ▄▄▄█▀
+                  ██                                        
+                ▀▀▀                                          
 ```
-
 A CLI for progressive disclosure of OpenAPI specs. Instead of dumping an entire spec at once, phyllotaxis lets you drill down level by level — overview, resources, endpoints, schemas — so you (or an LLM) only see what's relevant. Dual output in plain text and JSON.
 
 ## Getting Started
@@ -139,6 +134,9 @@ Responses:
 Errors:
   400 Invalid input
   409 Duplicate pet
+
+Drill deeper:
+  phyllotaxis schemas Pet
 ```
 
 ### Schema Detail
@@ -189,11 +187,12 @@ $ phyllotaxis --json schemas Pet | jq '.fields[].name'
 
 ## Spec Discovery
 
-Phyllotaxis finds your spec file in three ways (in priority order):
+Phyllotaxis finds your spec file in four ways (in priority order):
 
 1. **`--spec` flag** — explicit path, always wins
-2. **`.phyllotaxis.yaml` config** — created by `phyllotaxis init`, checked in the current directory and parents
-3. **Auto-detect** — scans for `*.yaml`/`*.yml`/`*.json` files containing `openapi:` in the first 200 bytes
+2. **`PHYLLOTAXIS_SPEC` env var** — set to a file path; errors if set but the file doesn't exist, silently ignored if empty
+3. **`.phyllotaxis.yaml` config** — created by `phyllotaxis init`, checked in the current directory and parents
+4. **Auto-detect** — scans for `*.yaml`/`*.yml`/`*.json` files containing `openapi:` in the first 200 bytes
 
 Run `phyllotaxis init` to set up a config:
 
@@ -220,6 +219,7 @@ Initialized. Run `phyllotaxis` to see your API overview.
 phyllotaxis/
 ├── src/
 │   ├── main.rs              # CLI entry point (clap)
+│   ├── lib.rs               # Public crate API (re-exports)
 │   ├── spec.rs              # Config loading, spec resolution, parsing
 │   ├── commands/
 │   │   ├── overview.rs      # L0: API overview builder
@@ -238,14 +238,15 @@ phyllotaxis/
     ├── fixtures/
     │   └── petstore.yaml    # Test fixture
     ├── fixture_sanity.rs    # Fixture parse validation
-    └── integration_tests.rs # End-to-end CLI tests
+    ├── integration_tests.rs # End-to-end CLI tests
+    └── lib_tests.rs         # Library API tests
 ```
 
 ## Development
 
 ```bash
 cargo build      # Debug build
-cargo test       # Run all 72 tests (unit + integration)
+cargo test       # Run all 148 tests (unit + integration)
 cargo build -r   # Release build
 ```
 

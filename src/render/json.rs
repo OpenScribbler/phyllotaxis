@@ -4,6 +4,7 @@ use crate::models::resource::ResourceGroup;
 #[derive(serde::Serialize)]
 struct SchemaDetailJson<'a> {
     name: &'a str,
+    title: Option<&'a str>,
     description: Option<&'a str>,
     composition: Option<CompositionJson>,
     discriminator: Option<DiscriminatorJson<'a>>,
@@ -41,8 +42,11 @@ struct FieldJson<'a> {
     optional: bool,
     nullable: bool,
     read_only: bool,
+    write_only: bool,
+    deprecated: bool,
     description: Option<&'a str>,
     enum_values: &'a [String],
+    constraints: &'a [String],
     default: Option<&'a serde_json::Value>,
     nested_schema: Option<&'a str>,
     nested_fields: Vec<FieldJson<'a>>,
@@ -64,8 +68,11 @@ fn convert_fields<'a>(fields: &'a [crate::models::resource::Field]) -> Vec<Field
             optional: f.optional,
             nullable: f.nullable,
             read_only: f.read_only,
+            write_only: f.write_only,
+            deprecated: f.deprecated,
             description: f.description.as_deref(),
             enum_values: &f.enum_values,
+            constraints: &f.constraints,
             default: f.default_value.as_ref(),
             nested_schema: f.nested_schema_name.as_deref(),
             nested_fields: convert_fields(&f.nested_fields),
@@ -90,6 +97,7 @@ pub fn render_overview(data: &OverviewData, is_tty: bool) -> String {
         auth: &'a [String],
         resource_count: usize,
         schema_count: usize,
+        callback_count: usize,
         commands: CommandsJson,
     }
 
@@ -132,6 +140,7 @@ pub fn render_overview(data: &OverviewData, is_tty: bool) -> String {
         auth: &data.auth_schemes,
         resource_count: data.resource_count,
         schema_count: data.schema_count,
+        callback_count: data.callback_count,
         commands: CommandsJson {
             resources: "phyllotaxis resources",
             schemas: "phyllotaxis schemas",
@@ -302,6 +311,7 @@ pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, is_tty: 
 
     let json = SchemaDetailJson {
         name: &model.name,
+        title: model.title.as_deref(),
         description: model.description.as_deref(),
         composition,
         discriminator,
@@ -314,6 +324,38 @@ pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, is_tty: 
     };
 
     serialize(&json, is_tty)
+}
+
+pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry], is_tty: bool) -> String {
+    #[derive(serde::Serialize)]
+    struct CallbackListJson<'a> {
+        total: usize,
+        callbacks: Vec<CallbackSummaryJson<'a>>,
+        drill_deeper: &'static str,
+    }
+    #[derive(serde::Serialize)]
+    struct CallbackSummaryJson<'a> {
+        name: &'a str,
+        defined_on_method: &'a str,
+        defined_on_path: &'a str,
+    }
+
+    let items: Vec<_> = callbacks.iter().map(|cb| CallbackSummaryJson {
+        name: &cb.name,
+        defined_on_method: &cb.defined_on_method,
+        defined_on_path: &cb.defined_on_path,
+    }).collect();
+
+    let json = CallbackListJson {
+        total: items.len(),
+        callbacks: items,
+        drill_deeper: "phyllotaxis callbacks <name>",
+    };
+    serialize(&json, is_tty)
+}
+
+pub fn render_callback_detail(cb: &crate::models::resource::CallbackEntry, is_tty: bool) -> String {
+    serialize(cb, is_tty)
 }
 
 pub fn render_search(results: &crate::commands::search::SearchResults, is_tty: bool) -> String {
@@ -356,6 +398,7 @@ mod tests {
             auth_schemes: vec![],
             resource_count: 0,
             schema_count: 0,
+            callback_count: 0,
         };
         let v = parse_json(&render_overview(&overview, false));
         assert_eq!(v["title"], "Test API");
@@ -382,6 +425,7 @@ mod tests {
         // Schema detail
         let model = SchemaModel {
             name: "Pet".to_string(),
+            title: None,
             description: None,
             fields: vec![],
             composition: None,
@@ -413,6 +457,7 @@ mod tests {
             resources: vec![],
             endpoints: vec![],
             schemas: vec![],
+            callbacks: vec![],
         };
         let v = parse_json(&render_search(&results, false));
         assert_eq!(v["term"], "test");
@@ -431,12 +476,73 @@ mod tests {
             request_body: None,
             responses: vec![],
             security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
             drill_deeper: vec![],
         };
         let v = parse_json(&render_endpoint_detail(&endpoint, false));
         assert_eq!(v["method"], "GET");
         assert_eq!(v["is_deprecated"], false);
         assert!(v["drill_deeper"].is_array(), "drill_deeper should be present as array");
+
+        // Schema with title (Task 20)
+        let model_with_title = SchemaModel {
+            name: "GeoLocation".to_string(),
+            title: Some("Geographic Location".to_string()),
+            description: None,
+            fields: vec![],
+            composition: None,
+            discriminator: None,
+            external_docs: None,
+        };
+        let v = parse_json(&render_schema_detail(&model_with_title, false));
+        assert_eq!(v["title"], "Geographic Location", "JSON should include title");
+
+        // Field with new properties (Task 20)
+        use crate::models::resource::{RequestBody, Field};
+        let endpoint_with_new_fields = Endpoint {
+            method: "POST".to_string(),
+            path: "/test".to_string(),
+            summary: None,
+            description: None,
+            is_deprecated: false,
+            is_alpha: false,
+            external_docs: None,
+            parameters: vec![],
+            request_body: Some(RequestBody {
+                content_type: "application/json".to_string(),
+                fields: vec![Field {
+                    name: "password".to_string(),
+                    type_display: "string".to_string(),
+                    required: true,
+                    optional: false,
+                    nullable: false,
+                    read_only: false,
+                    write_only: true,
+                    deprecated: false,
+                    description: None,
+                    enum_values: vec![],
+                    constraints: vec!["min:8".to_string()],
+                    default_value: None,
+                    example: None,
+                    nested_schema_name: None,
+                    nested_fields: vec![],
+                }],
+                options: vec![],
+                schema_ref: None,
+                example: None,
+            }),
+            responses: vec![],
+            security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
+            drill_deeper: vec![],
+        };
+        let v = parse_json(&render_endpoint_detail(&endpoint_with_new_fields, false));
+        let fields = &v["request_body"]["fields"][0];
+        assert_eq!(fields["write_only"], true);
+        assert_eq!(fields["deprecated"], false);
+        assert!(fields["constraints"].is_array());
     }
 
     #[test]
@@ -479,6 +585,8 @@ mod tests {
             request_body: None,
             responses: vec![],
             security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
             drill_deeper: vec!["phyllotaxis schemas Pet".to_string()],
         };
         let v = parse_json(&render_endpoint_detail(&endpoint, false));
@@ -487,5 +595,46 @@ mod tests {
             serde_json::json!(["phyllotaxis schemas Pet"]),
             "drill_deeper should contain the schema command"
         );
+    }
+
+    // ─── Task 21: Endpoint JSON includes headers, links, callbacks ───
+
+    #[test]
+    fn test_endpoint_json_includes_new_fields() {
+        use crate::models::resource::*;
+
+        let endpoint = Endpoint {
+            method: "GET".to_string(),
+            path: "/users".to_string(),
+            summary: None,
+            description: None,
+            is_deprecated: false,
+            is_alpha: false,
+            external_docs: None,
+            parameters: vec![],
+            request_body: None,
+            responses: vec![Response {
+                status_code: "200".to_string(),
+                description: "OK".to_string(),
+                schema_ref: None,
+                example: None,
+                headers: vec![ResponseHeader {
+                    name: "X-Total-Count".to_string(),
+                    type_display: "integer".to_string(),
+                    description: None,
+                }],
+                links: vec![],
+            }],
+            security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
+            drill_deeper: vec![],
+        };
+
+        let v = parse_json(&render_endpoint_detail(&endpoint, false));
+        assert!(v["responses"][0]["headers"].is_array(), "headers should be array in JSON");
+        assert_eq!(v["responses"][0]["headers"][0]["name"], "X-Total-Count");
+        assert!(v["callbacks"].is_array(), "callbacks should be present as array");
+        assert!(v.get("links").is_none(), "top-level links should not be serialized in JSON");
     }
 }

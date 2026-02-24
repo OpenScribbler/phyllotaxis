@@ -77,6 +77,7 @@ pub fn build_schema_model(
     let schema = find_schema(api, name)?;
 
     let description = schema.schema_data.description.clone();
+    let title = schema.schema_data.title.clone();
 
     let (fields, composition) = match &schema.schema_kind {
         openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => {
@@ -90,6 +91,16 @@ pub fn build_schema_model(
                 .enumeration
                 .iter()
                 .filter_map(|v| v.clone())
+                .collect();
+            (Vec::new(), Some(Composition::Enum(values)))
+        }
+        openapiv3::SchemaKind::Type(openapiv3::Type::Integer(int_type))
+            if !int_type.enumeration.is_empty() =>
+        {
+            let values: Vec<String> = int_type
+                .enumeration
+                .iter()
+                .filter_map(|v| v.map(|n| n.to_string()))
                 .collect();
             (Vec::new(), Some(Composition::Enum(values)))
         }
@@ -137,6 +148,7 @@ pub fn build_schema_model(
 
     Some(SchemaModel {
         name: name.to_string(),
+        title,
         description,
         fields,
         composition,
@@ -212,6 +224,13 @@ mod tests {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let content =
             std::fs::read_to_string(manifest_dir.join("tests/fixtures/petstore.yaml")).unwrap();
+        serde_yaml_ng::from_str(&content).unwrap()
+    }
+
+    fn load_kitchen_sink_api() -> openapiv3::OpenAPI {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let content =
+            std::fs::read_to_string(manifest_dir.join("tests/fixtures/kitchen-sink.yaml")).unwrap();
         serde_yaml_ng::from_str(&content).unwrap()
     }
 
@@ -356,5 +375,37 @@ mod tests {
             disc.mapping.iter().any(|(k, v)| k == "owner" && v == "Owner"),
             "Expected owner→Owner mapping"
         );
+    }
+
+    #[test]
+    fn test_integer_enum_schema_model() {
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "Priority", false, 5).unwrap();
+        match &model.composition {
+            Some(Composition::Enum(values)) => {
+                assert!(values.contains(&"0".to_string()), "missing 0: {:?}", values);
+                assert!(values.contains(&"4".to_string()), "missing 4: {:?}", values);
+                assert_eq!(values.len(), 5);
+            }
+            other => panic!("Expected Enum, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_schema_title_extracted() {
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "GeoLocation", false, 5).unwrap();
+        assert_eq!(
+            model.title.as_deref(),
+            Some("Geographic Location"),
+            "GeoLocation should have title 'Geographic Location', got: {:?}", model.title
+        );
+    }
+
+    #[test]
+    fn test_schema_no_title_is_none() {
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "User", false, 5).unwrap();
+        assert!(model.title.is_none(), "User has no title, got: {:?}", model.title);
     }
 }

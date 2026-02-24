@@ -1,0 +1,1672 @@
+openapi: 3.0.3
+info:
+  title: Kitchen Sink API
+  description: >
+    Comprehensive test specification exercising every OpenAPI 3.0 feature.
+    Not a real API — purely a test fixture for phyllotaxis.
+  version: 2.1.0
+  contact:
+    name: Test Support Team
+    url: https://example.com/support
+    email: support@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: https://example.com/terms
+
+externalDocs:
+  description: Full API documentation
+  url: https://example.com/docs
+
+servers:
+  - url: https://{environment}.example.com/api/{version}
+    description: Main API server
+    variables:
+      environment:
+        default: prod
+        enum:
+          - prod
+          - staging
+          - dev
+        description: Server environment
+      version:
+        default: v1
+        description: API version prefix
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Users
+    description: User management — standard CRUD operations
+    externalDocs:
+      description: User management guide
+      url: https://example.com/docs/users
+  - name: Pets
+    description: Schema composition testing (allOf, oneOf, anyOf, discriminators)
+  - name: Files
+    description: Binary and multipart upload testing
+  - name: Notifications
+    description: Callbacks and links testing
+  - name: Admin
+    description: Security variety and deprecated operations
+  - name: Health
+    description: Minimal endpoints for rare HTTP methods
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ──────────────────────────────────────────────
+  # USERS — Standard CRUD, parameter variety
+  # ──────────────────────────────────────────────
+  /users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: List all users
+      description: Returns a paginated list of users with filtering support.
+      parameters:
+        - name: page
+          in: query
+          description: Page number
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sort
+          in: query
+          description: Sort field
+          schema:
+            type: string
+            enum: [name, created_at, updated_at]
+            default: created_at
+        - name: status
+          in: query
+          description: Filter by status (multiple allowed)
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [active, inactive, suspended]
+        - name: X-Request-ID
+          in: header
+          description: Correlation ID for request tracing
+          schema:
+            type: string
+            format: uuid
+        - name: session_token
+          in: cookie
+          description: Session authentication token
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          headers:
+            X-Total-Count:
+              description: Total number of users matching the query
+              schema:
+                type: integer
+            X-Rate-Limit-Remaining:
+              description: Remaining requests in current window
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserList'
+              example:
+                items:
+                  - id: 550e8400-e29b-41d4-a716-446655440000
+                    username: johndoe
+                    email: john@example.com
+                    status: active
+                total: 42
+                page: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    post:
+      tags: [Users]
+      operationId: createUser
+      summary: Create a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+            example:
+              username: janedoe
+              email: jane@example.com
+              password: s3cret!
+              role: editor
+      responses:
+        '201':
+          description: User created successfully
+          headers:
+            Location:
+              description: URL of created resource
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          links:
+            GetCreatedUser:
+              operationId: getUser
+              parameters:
+                userId: '$response.body#/id'
+              description: Fetch the newly created user
+            ListUserPets:
+              operationId: listUserPets
+              parameters:
+                ownerId: '$response.body#/id'
+              description: List pets owned by the new user
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        description: Unique user identifier
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Users]
+      operationId: getUser
+      summary: Get user by ID
+      parameters:
+        - name: fields
+          in: query
+          description: Sparse fieldset — only return these fields
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: include
+          in: query
+          description: Related resources to embed
+          style: deepObject
+          schema:
+            type: object
+            properties:
+              pets:
+                type: boolean
+              notifications:
+                type: boolean
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/User'
+          links:
+            ListUserPets:
+              operationId: listUserPets
+              parameters:
+                ownerId: '$response.body#/id'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Users]
+      operationId: updateUser
+      summary: Replace user entirely
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Users]
+      operationId: patchUser
+      summary: Partially update user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchUserRequest'
+      responses:
+        '200':
+          description: User patched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    delete:
+      tags: [Users]
+      operationId: deleteUser
+      summary: Delete a user
+      responses:
+        '204':
+          description: User deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/search:
+    get:
+      tags: [Users]
+      operationId: searchUsers
+      summary: Search users with advanced filters
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query string
+          allowEmptyValue: false
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+        - name: roles
+          in: query
+          description: Filter by roles
+          style: pipeDelimited
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [admin, editor, viewer]
+            minItems: 1
+            maxItems: 3
+            uniqueItems: true
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: created_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: include_deleted
+          in: query
+          description: Include soft-deleted users
+          allowEmptyValue: true
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserList'
+
+  # ──────────────────────────────────────────────
+  # PETS — Polymorphism and schema composition
+  # ──────────────────────────────────────────────
+  /pets:
+    get:
+      tags: [Pets]
+      operationId: listPets
+      summary: List all pets
+      description: Returns pets which may be Dogs, Cats, or Birds — demonstrates polymorphism.
+      parameters:
+        - name: species
+          in: query
+          schema:
+            type: string
+            enum: [dog, cat, bird]
+        - name: tags
+          in: query
+          description: Filter by tags
+          style: spaceDelimited
+          schema:
+            type: array
+            items:
+              type: string
+        - name: min_age_months
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            multipleOf: 6
+      responses:
+        '200':
+          description: List of pets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+    post:
+      tags: [Pets]
+      operationId: createPet
+      summary: Create a pet
+      description: Request body uses oneOf with discriminator to accept different pet types.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePetRequest'
+      responses:
+        '201':
+          description: Pet created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /pets/{petId}:
+    get:
+      tags: [Pets]
+      operationId: getPet
+      summary: Get pet by ID
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Pet found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+              examples:
+                dog:
+                  $ref: '#/components/examples/DogExample'
+                cat:
+                  summary: Example cat
+                  value:
+                    id: 2
+                    name: Whiskers
+                    species: cat
+                    indoor: true
+                    color: tabby
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{ownerId}/pets:
+    get:
+      tags: [Pets]
+      operationId: listUserPets
+      summary: List pets owned by a user
+      parameters:
+        - name: ownerId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User's pets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+
+  # ──────────────────────────────────────────────
+  # FILES — Binary, multipart, encoding
+  # ──────────────────────────────────────────────
+  /files/upload:
+    post:
+      tags: [Files]
+      operationId: uploadFile
+      summary: Upload a single file
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The file to upload
+                description:
+                  type: string
+                  description: Optional file description
+                tags:
+                  type: array
+                  items:
+                    type: string
+            encoding:
+              file:
+                contentType: application/octet-stream
+              tags:
+                style: form
+                explode: true
+      responses:
+        '201':
+          description: File uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMetadata'
+        '413':
+          description: File too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /files/upload-batch:
+    post:
+      tags: [Files]
+      operationId: uploadMultipleFiles
+      summary: Upload multiple files with metadata
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                metadata:
+                  type: string
+                  format: binary
+                  description: JSON metadata file
+      responses:
+        '201':
+          description: Files uploaded
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileMetadata'
+
+  /files/{fileId}:
+    get:
+      tags: [Files]
+      operationId: downloadFile
+      summary: Download a file
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              description: Suggested filename
+              schema:
+                type: string
+            X-File-Checksum:
+              description: SHA-256 of file contents
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/metadata:
+    put:
+      tags: [Files]
+      operationId: updateFileMetadata
+      summary: Update file metadata via form
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Metadata updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMetadata'
+
+  # ──────────────────────────────────────────────
+  # NOTIFICATIONS — Callbacks, links, examples
+  # ──────────────────────────────────────────────
+  /notifications/subscribe:
+    post:
+      tags: [Notifications]
+      operationId: subscribeNotifications
+      summary: Subscribe to event notifications
+      description: Registers a callback URL to receive push notifications for specified events.
+      parameters:
+        - name: callbackUrl
+          in: query
+          required: true
+          description: URL that will receive callback POSTs
+          allowReserved: true
+          schema:
+            type: string
+            format: uri
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionRequest'
+      callbacks:
+        onEvent:
+          '{$request.query.callbackUrl}/events':
+            post:
+              summary: Event notification callback
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/EventPayload'
+              responses:
+                '200':
+                  description: Callback acknowledged
+                '410':
+                  description: Subscription cancelled by client
+        onStatusChange:
+          '{$request.query.callbackUrl}/status':
+            post:
+              summary: Status change notification
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      type: object
+                      properties:
+                        subscription_id:
+                          type: string
+                          format: uuid
+                        new_status:
+                          type: string
+                          enum: [active, paused, expired]
+                        changed_at:
+                          type: string
+                          format: date-time
+              responses:
+                '200':
+                  description: Status change acknowledged
+      responses:
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      operationId: listNotifications
+      summary: List notifications
+      responses:
+        '200':
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+              examples:
+                unread:
+                  summary: Unread notifications only
+                  value:
+                    - id: notif-001
+                      type: info
+                      message: Your pet was approved
+                      read: false
+                all:
+                  summary: All notifications
+                  value:
+                    - id: notif-001
+                      type: info
+                      message: Your pet was approved
+                      read: true
+                    - id: notif-002
+                      type: warning
+                      message: Password expires in 7 days
+                      read: false
+
+  # ──────────────────────────────────────────────
+  # ADMIN — Security variety, deprecated, x-*
+  # ──────────────────────────────────────────────
+  /admin/settings:
+    get:
+      tags: [Admin]
+      operationId: getSettings
+      summary: Get system settings
+      security:
+        - apiKeyHeader: []
+        - apiKeyQuery: []
+        - apiKeyCookie: []
+      responses:
+        '200':
+          description: System settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags: [Admin]
+      operationId: updateSettings
+      summary: Update system settings
+      security:
+        - oauth2:
+            - admin:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+
+  /admin/reports/{reportId}:
+    get:
+      tags: [Admin]
+      operationId: getReport
+      summary: Get a generated report
+      deprecated: true
+      description: >
+        **Deprecated.** Use /admin/reports/v2/{reportId} instead.
+        See the migration guide for details.
+      externalDocs:
+        description: Reports v2 migration guide
+        url: https://example.com/docs/reports-v2-migration
+      x-sunset-date: '2026-06-01'
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+        - name: format
+          in: query
+          deprecated: true
+          description: Output format (deprecated — use Accept header instead)
+          schema:
+            type: string
+            enum: [json, csv, pdf]
+      security:
+        - bearerAuth: []
+        - openIdConnect:
+            - reports:read
+      responses:
+        '200':
+          description: Report data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+
+  /admin/audit-log:
+    get:
+      tags: [Admin]
+      operationId: getAuditLog
+      summary: Get audit log entries
+      description: Requires both bearer token AND API key (combined security).
+      security:
+        - bearerAuth: []
+          apiKeyHeader: []
+      parameters:
+        - name: after
+          in: query
+          description: Only entries after this timestamp
+          schema:
+            type: string
+            format: date-time
+        - name: action_types
+          in: query
+          description: Filter by action types
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditEntry'
+
+  /admin/bulk-import:
+    post:
+      tags: [Admin]
+      operationId: bulkImport
+      summary: Import users from CSV
+      description: Accepts CSV file upload for bulk user import.
+      security:
+        - oauth2:
+            - admin:write
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema:
+              type: string
+      responses:
+        '202':
+          description: Import accepted for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [queued, processing]
+                  estimated_count:
+                    type: integer
+
+  # ──────────────────────────────────────────────
+  # HEALTH — Rare HTTP methods, no auth
+  # ──────────────────────────────────────────────
+  /health:
+    head:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Health check (HEAD)
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          headers:
+            X-Health-Status:
+              schema:
+                type: string
+                enum: [healthy, degraded]
+        '503':
+          description: Service unavailable
+    options:
+      tags: [Health]
+      operationId: healthOptions
+      summary: CORS preflight
+      security: []
+      responses:
+        '204':
+          description: CORS headers returned
+          headers:
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+    get:
+      tags: [Health]
+      operationId: getHealthDetails
+      summary: Detailed health status
+      description: Returns component-level health with latency metrics.
+      servers:
+        - url: https://health.example.com
+          description: Dedicated health endpoint
+      security: []
+      responses:
+        '200':
+          description: Health details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+    trace:
+      tags: [Health]
+      operationId: traceHealth
+      summary: Diagnostic trace
+      security: []
+      responses:
+        '200':
+          description: Trace response
+          content:
+            message/http:
+              schema:
+                type: string
+
+# ════════════════════════════════════════════════
+# COMPONENTS
+# ════════════════════════════════════════════════
+components:
+  schemas:
+    # ── USER MODELS ──────────────────────────────
+    User:
+      type: object
+      required: [id, username, email, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique user identifier
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+          pattern: '^[a-zA-Z0-9_-]+$'
+          description: Unique username
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+          nullable: true
+          description: Optional display name
+        avatar_url:
+          type: string
+          format: uri
+          nullable: true
+        status:
+          type: string
+          enum: [active, inactive, suspended]
+          default: active
+        role:
+          type: string
+          enum: [admin, editor, viewer]
+          default: viewer
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: Arbitrary key-value metadata
+          minProperties: 0
+          maxProperties: 20
+      xml:
+        name: user
+
+    CreateUserRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+          pattern: '^[a-zA-Z0-9_-]+$'
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 8
+        role:
+          type: string
+          enum: [admin, editor, viewer]
+          default: viewer
+        display_name:
+          type: string
+          nullable: true
+
+    UpdateUserRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateUserRequest'
+        - type: object
+          properties:
+            status:
+              type: string
+              enum: [active, inactive, suspended]
+
+    PatchUserRequest:
+      type: object
+      description: All fields are optional for partial updates.
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [admin, editor, viewer]
+        status:
+          type: string
+          enum: [active, inactive, suspended]
+
+    UserList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        total:
+          type: integer
+          minimum: 0
+        page:
+          type: integer
+          minimum: 1
+
+    # ── PET MODELS (polymorphism) ────────────────
+    Pet:
+      oneOf:
+        - $ref: '#/components/schemas/Dog'
+        - $ref: '#/components/schemas/Cat'
+        - $ref: '#/components/schemas/Bird'
+      discriminator:
+        propertyName: species
+        mapping:
+          dog: '#/components/schemas/Dog'
+          cat: '#/components/schemas/Cat'
+          bird: '#/components/schemas/Bird'
+
+    PetBase:
+      type: object
+      required: [id, name, species]
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+        name:
+          type: string
+          example: Buddy
+        species:
+          type: string
+          description: Discriminator property
+        owner_id:
+          type: string
+          format: uuid
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+          uniqueItems: true
+          example: [friendly, trained]
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        legacy_code:
+          type: string
+          deprecated: true
+          description: No longer used — retained for backwards compatibility
+
+    Dog:
+      allOf:
+        - $ref: '#/components/schemas/PetBase'
+        - type: object
+          required: [breed]
+          properties:
+            species:
+              type: string
+              enum: [dog]
+            breed:
+              type: string
+              enum: [labrador, poodle, bulldog, mixed]
+            is_trained:
+              type: boolean
+              default: false
+
+    Cat:
+      allOf:
+        - $ref: '#/components/schemas/PetBase'
+        - type: object
+          properties:
+            species:
+              type: string
+              enum: [cat]
+            indoor:
+              type: boolean
+              default: true
+            color:
+              type: string
+              enum: [black, white, orange, calico, tabby]
+
+    Bird:
+      allOf:
+        - $ref: '#/components/schemas/PetBase'
+        - type: object
+          properties:
+            species:
+              type: string
+              enum: [bird]
+            can_fly:
+              type: boolean
+              default: true
+            wingspan_cm:
+              type: number
+              format: double
+              minimum: 1.0
+              maximum: 400.0
+              exclusiveMaximum: true
+
+    CreatePetRequest:
+      oneOf:
+        - $ref: '#/components/schemas/CreateDogRequest'
+        - $ref: '#/components/schemas/CreateCatRequest'
+        - $ref: '#/components/schemas/CreateBirdRequest'
+      discriminator:
+        propertyName: species
+        mapping:
+          dog: '#/components/schemas/CreateDogRequest'
+          cat: '#/components/schemas/CreateCatRequest'
+          bird: '#/components/schemas/CreateBirdRequest'
+
+    CreateDogRequest:
+      type: object
+      required: [name, species, breed]
+      properties:
+        name:
+          type: string
+        species:
+          type: string
+          enum: [dog]
+        breed:
+          type: string
+          enum: [labrador, poodle, bulldog, mixed]
+        is_trained:
+          type: boolean
+
+    CreateCatRequest:
+      type: object
+      required: [name, species]
+      properties:
+        name:
+          type: string
+        species:
+          type: string
+          enum: [cat]
+        indoor:
+          type: boolean
+        color:
+          type: string
+
+    CreateBirdRequest:
+      type: object
+      required: [name, species]
+      properties:
+        name:
+          type: string
+        species:
+          type: string
+          enum: [bird]
+        can_fly:
+          type: boolean
+        wingspan_cm:
+          type: number
+
+    # ── anyOf example ────────────────────────────
+    SearchResult:
+      anyOf:
+        - $ref: '#/components/schemas/User'
+        - $ref: '#/components/schemas/PetBase'
+        - $ref: '#/components/schemas/FileMetadata'
+      description: A search result can be a user, pet, or file
+
+    # ── not example ──────────────────────────────
+    NonAdminRole:
+      not:
+        type: object
+        properties:
+          role:
+            type: string
+            enum: [admin]
+      description: Any role except admin
+
+    # ── FILE MODELS ──────────────────────────────
+    FileMetadata:
+      type: object
+      required: [id, filename, size_bytes, content_type]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        filename:
+          type: string
+          example: report.pdf
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          readOnly: true
+        content_type:
+          type: string
+          example: application/pdf
+        checksum:
+          type: string
+          description: SHA-256 hash
+          pattern: '^[a-f0-9]{64}$'
+          readOnly: true
+        uploaded_by:
+          type: string
+          format: uuid
+        uploaded_at:
+          type: string
+          format: date-time
+          readOnly: true
+        url:
+          type: string
+          format: uri
+          readOnly: true
+
+    # ── NOTIFICATION MODELS ──────────────────────
+    SubscriptionRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            type: string
+            enum:
+              - user.created
+              - user.updated
+              - user.deleted
+              - pet.created
+              - pet.updated
+              - file.uploaded
+          minItems: 1
+          uniqueItems: true
+        filter:
+          type: object
+          additionalProperties: true
+          description: Optional event filter criteria
+
+    Subscription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        callback_url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [active, paused, expired]
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+
+    EventPayload:
+      type: object
+      required: [event_type, timestamp, data]
+      properties:
+        event_type:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          additionalProperties: true
+        correlation_id:
+          type: string
+          format: uuid
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [info, warning, error]
+        message:
+          type: string
+        read:
+          type: boolean
+          default: false
+        created_at:
+          type: string
+          format: date-time
+
+    # ── ADMIN MODELS ─────────────────────────────
+    Settings:
+      type: object
+      properties:
+        maintenance_mode:
+          type: boolean
+          default: false
+        max_upload_size_mb:
+          type: integer
+          minimum: 1
+          maximum: 1024
+          default: 50
+          multipleOf: 5
+        allowed_origins:
+          type: array
+          items:
+            type: string
+            format: uri
+          example:
+            - https://app.example.com
+            - https://admin.example.com
+        feature_flags:
+          type: object
+          additionalProperties:
+            type: boolean
+          example:
+            dark_mode: true
+            beta_features: false
+        smtp_config:
+          type: object
+          nullable: true
+          properties:
+            host:
+              type: string
+              format: hostname
+            port:
+              type: integer
+              minimum: 1
+              maximum: 65535
+            username:
+              type: string
+            password:
+              type: string
+              format: password
+              writeOnly: true
+
+    Report:
+      type: object
+      deprecated: true
+      description: Legacy report format. Use ReportV2 instead.
+      properties:
+        id:
+          type: integer
+          format: int32
+        title:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        format:
+          type: string
+          enum: [json, csv, pdf]
+        data:
+          type: object
+          additionalProperties: true
+
+    AuditEntry:
+      type: object
+      required: [id, action, actor, timestamp]
+      properties:
+        id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          description: Action performed
+        actor:
+          type: string
+          format: uuid
+          description: User who performed the action
+        target_type:
+          type: string
+          enum: [user, pet, file, setting]
+        target_id:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+        ip_address:
+          type: string
+          format: ipv4
+        timestamp:
+          type: string
+          format: date-time
+
+    # ── HEALTH MODELS ────────────────────────────
+    HealthStatus:
+      type: object
+      required: [status, components]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        uptime_seconds:
+          type: integer
+          format: int64
+        version:
+          type: string
+        components:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentHealth'
+
+    ComponentHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [up, down, degraded]
+        latency_ms:
+          type: number
+          format: float
+          nullable: true
+        message:
+          type: string
+          nullable: true
+
+    # ── ERROR MODELS ─────────────────────────────
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+        message:
+          type: string
+          description: Human-readable error description
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+          nullable: true
+        request_id:
+          type: string
+          format: uuid
+
+    ErrorDetail:
+      type: object
+      properties:
+        field:
+          type: string
+        reason:
+          type: string
+        value:
+          description: The invalid value (any type)
+
+    # ── SPECIAL MODELS ───────────────────────────
+    TreeNode:
+      type: object
+      description: A recursive tree structure (self-referencing schema)
+      required: [name]
+      properties:
+        name:
+          type: string
+        value:
+          nullable: true
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/TreeNode'
+
+    GeoLocation:
+      title: Geographic Location
+      type: object
+      description: GPS coordinates with precision constraints
+      properties:
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          example: 37.7749
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          example: -122.4194
+        altitude_m:
+          type: number
+          nullable: true
+        accuracy_m:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+
+    Priority:
+      type: integer
+      enum: [0, 1, 2, 3, 4]
+      description: 'Priority level: 0=critical, 1=high, 2=medium, 3=low, 4=backlog'
+      example: 2
+
+  # ── REUSABLE RESPONSES ────────────────────────
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnexpectedError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  # ── REUSABLE PARAMETERS ───────────────────────
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    LimitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  # ── REUSABLE EXAMPLES ─────────────────────────
+  examples:
+    UserExample:
+      summary: Example user
+      value:
+        id: 550e8400-e29b-41d4-a716-446655440000
+        username: johndoe
+        email: john@example.com
+        status: active
+        role: editor
+    DogExample:
+      summary: Example dog
+      value:
+        id: 1
+        name: Buddy
+        species: dog
+        breed: labrador
+        is_trained: true
+
+  # ── REUSABLE LINKS ────────────────────────────
+  links:
+    GetUser:
+      operationId: getUser
+      parameters:
+        userId: '$response.body#/id'
+      description: Fetch the user by the returned ID
+    ListUserPets:
+      operationId: listUserPets
+      parameters:
+        ownerId: '$response.body#/id'
+      description: List pets owned by this user
+
+  # ── SECURITY SCHEMES ──────────────────────────
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token authentication
+    basicAuth:
+      type: http
+      scheme: basic
+      description: HTTP Basic authentication
+    apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key passed in header
+    apiKeyQuery:
+      type: apiKey
+      in: query
+      name: api_key
+      description: API key passed in query string
+    apiKeyCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Session cookie authentication
+    oauth2:
+      type: oauth2
+      description: OAuth 2.0 with all four grant types
+      flows:
+        implicit:
+          authorizationUrl: https://auth.example.com/oauth/authorize
+          scopes:
+            read: Read access
+            write: Write access
+            admin:write: Admin write access
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/oauth/authorize
+          tokenUrl: https://auth.example.com/oauth/token
+          refreshUrl: https://auth.example.com/oauth/refresh
+          scopes:
+            read: Read access
+            write: Write access
+            admin:write: Admin write access
+            reports:read: Read reports
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            admin:write: Admin write access
+        password:
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read: Read access
+            write: Write access
+    openIdConnect:
+      type: openIdConnect
+      description: OpenID Connect discovery
+      openIdConnectUrl: https://auth.example.com/.well-known/openid-configuration

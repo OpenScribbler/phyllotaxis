@@ -635,3 +635,250 @@ fn test_completions_fish() {
         &stdout[..200.min(stdout.len())]
     );
 }
+
+// ─── Task 23: Kitchen-sink coverage gap integration tests ───
+
+/// Helper to run with the kitchen-sink fixture as --spec
+fn run_with_kitchen_sink(args: &[&str]) -> (String, String, i32) {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
+    let mut full_args = vec!["--spec", &spec];
+    full_args.extend_from_slice(args);
+    run(&full_args)
+}
+
+// Success criterion 1: Non-JSON request bodies (multipart/form-data)
+#[test]
+fn test_multipart_body_visible_in_upload_endpoint() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "files", "POST", "/files/upload"]);
+    assert_eq!(code, 0, "Expected exit code 0");
+    assert!(stdout.contains("multipart/form-data"), "Missing content type, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(stdout.contains("file"), "Missing file field, got:\n{}", &stdout[..300.min(stdout.len())]);
+}
+
+// Success criterion 2: Response headers
+#[test]
+fn test_response_headers_visible() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "users", "GET", "/users"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("X-Total-Count"), "Missing response header, got:\n{}", &stdout[..300.min(stdout.len())]);
+}
+
+// Success criterion 3: Callbacks list
+#[test]
+fn test_callbacks_list_kitchen_sink() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["callbacks"]);
+    assert_eq!(code, 0, "Expected exit code 0");
+    assert!(stdout.contains("onEvent"), "Missing onEvent callback");
+    assert!(stdout.contains("onStatusChange"), "Missing onStatusChange callback");
+}
+
+// Success criterion 4: Callback detail
+#[test]
+fn test_callbacks_detail_on_event() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["callbacks", "onEvent"]);
+    assert_eq!(code, 0, "Expected exit code 0");
+    assert!(stdout.contains("Callback: onEvent"), "Missing header");
+    assert!(stdout.contains("EventPayload"), "Missing body schema");
+}
+
+#[test]
+fn test_callbacks_not_found() {
+    let (_stdout, stderr, code) = run_with_kitchen_sink(&["callbacks", "nonexistent"]);
+    assert_eq!(code, 1, "Expected exit code 1");
+    assert!(stderr.contains("not found"), "Missing not found message");
+}
+
+// Success criterion 5: Links
+#[test]
+fn test_links_visible_on_post_users() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "users", "POST", "/users"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("GetCreatedUser"), "Missing link, got:\n{}", &stdout[..300.min(stdout.len())]);
+}
+
+// Success criterion 6: Schema constraints
+#[test]
+fn test_schema_constraints_visible() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "User"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("min:3"), "Missing min constraint, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(stdout.contains("max:32"), "Missing max constraint, got:\n{}", &stdout[..300.min(stdout.len())]);
+}
+
+// Success criterion 7: writeOnly
+#[test]
+fn test_write_only_visible_on_create_user_request() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "CreateUserRequest"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("write-only"), "Missing write-only on password field, got:\n{}", &stdout[..300.min(stdout.len())]);
+}
+
+// Success criterion 8: deprecated
+#[test]
+fn test_deprecated_visible_on_pet_base() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "PetBase"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("DEPRECATED"), "Missing DEPRECATED on legacy_code, got:\n{}", &stdout[..300.min(stdout.len())]);
+}
+
+// Success criterion 9: Schema title
+#[test]
+fn test_schema_title_visible() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "GeoLocation"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Geographic Location"), "Missing title, got:\n{}", &stdout[..300.min(stdout.len())]);
+}
+
+// Success criterion 10: Integer enums
+#[test]
+fn test_integer_enum_visible() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "Priority"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains('0'), "Missing integer enum value, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(stdout.contains('4'), "Missing integer enum value 4, got:\n{}", &stdout[..300.min(stdout.len())]);
+}
+
+// ─── Review Fixes ───
+
+#[test]
+fn test_empty_request_body_shows_raw_body_message() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "admin", "POST", "/admin/bulk-import"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Raw body (no schema)"),
+        "Empty request body should show 'Raw body (no schema)', got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_exclusive_min_max_shows_operators() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "GeoLocation"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains(">0"),
+        "exclusiveMinimum should display as '>0', got:\n{}",
+        stdout
+    );
+    // Should NOT show the bare word "exclusiveMinimum"
+    assert!(
+        !stdout.contains("exclusiveMinimum"),
+        "Should not show bare 'exclusiveMinimum' label, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_array_item_type_propagation() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "files", "POST", "/files/upload-batch"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("binary[]"),
+        "Array of binary items should show 'binary[]', got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_no_trailing_whitespace_on_empty_header_description() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "health", "HEAD", "/health"]);
+    assert_eq!(code, 0);
+    // Find the X-Health-Status line and check for trailing whitespace
+    for line in stdout.lines() {
+        if line.contains("X-Health-Status") {
+            assert_eq!(
+                line, line.trim_end(),
+                "Header line should not have trailing whitespace"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_json_no_top_level_links() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--json", "resources", "users", "POST", "/users"]);
+    assert_eq!(code, 0);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|_| panic!("Invalid JSON: {}", &stdout[..200.min(stdout.len())]));
+    // Top-level "links" should not exist in JSON output
+    assert!(
+        json.get("links").is_none(),
+        "JSON endpoint detail should not have top-level 'links' (they belong on individual responses)"
+    );
+    // But links should still exist on individual responses
+    let responses = json.get("responses").expect("responses should exist");
+    let has_response_links = responses.as_array().unwrap().iter().any(|r| {
+        r.get("links").map(|l| l.as_array().map(|a| !a.is_empty()).unwrap_or(false)).unwrap_or(false)
+    });
+    assert!(has_response_links, "Links should still appear on individual responses");
+}
+
+#[test]
+fn test_callback_list_shows_operation_count() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["callbacks"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("(1 operation)") || stdout.contains("(2 operations)"),
+        "Callback list should show operation count, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_expand_on_endpoint_shows_nested_fields() {
+    let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets", "POST", "/pets", "--expand"]);
+    assert_eq!(code, 0);
+    // With --expand, the owner field should show its nested fields (id, name)
+    assert!(
+        stdout.contains("owner") && (stdout.contains("Owner:")),
+        "With --expand, owner field should show as 'Owner:' with nested fields, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_search_finds_callbacks() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["search", "onEvent"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Callbacks:"),
+        "Search must include a Callbacks section, got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+    assert!(
+        stdout.contains("onEvent"),
+        "Search for 'onEvent' must find the callback, got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_callbacks_fuzzy_suggestion_on_typo() {
+    let (_stdout, stderr, code) = run_with_kitchen_sink(&["callbacks", "onEven"]);
+    assert_eq!(code, 1, "Expected exit code 1 for not found");
+    assert!(
+        stderr.contains("onEvent"),
+        "Expected suggestion 'onEvent' for typo 'onEven', got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_overview_shows_callback_count() {
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&[]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("2 available") && stdout.contains("callbacks"),
+        "Overview must include callback count for kitchen-sink (2 callbacks), got:\n{}",
+        &stdout[..500.min(stdout.len())]
+    );
+}
+
+// Success criterion 11: No regressions on petstore
+#[test]
+fn test_petstore_regression() {
+    let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets", "POST", "/pets"]);
+    assert_eq!(code, 0, "Petstore regression: POST /pets should still work");
+    assert!(stdout.contains("Request Body"), "Regression: missing request body");
+}
