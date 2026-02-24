@@ -74,6 +74,11 @@ pub fn render_overview(data: &OverviewData, _is_tty: bool) -> String {
         data.schema_count
     ).unwrap();
     out.push_str("  phyllotaxis auth         Authentication details\n");
+    writeln!(
+        out,
+        "  phyllotaxis callbacks    List all webhook callbacks ({} available)",
+        data.callback_count
+    ).unwrap();
     out.push_str("  phyllotaxis search       Search across all endpoints and schemas\n");
 
     out
@@ -137,6 +142,8 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
             for opt in &body.options {
                 writeln!(out, "    phyllotaxis schemas {}", sanitize(opt)).unwrap();
             }
+        } else if body.fields.is_empty() {
+            out.push_str("  Raw body (no schema)\n");
         } else {
             render_fields_section(&mut out, &body.fields);
         }
@@ -183,6 +190,16 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
                     writeln!(out, "    {}", line).unwrap();
                 }
             }
+
+            if !resp.headers.is_empty() {
+                out.push_str("    Headers:\n");
+                for h in &resp.headers {
+                    match h.description.as_deref() {
+                        Some(desc) => writeln!(out, "      {}  {}  {}", sanitize(&h.name), sanitize(&h.type_display), sanitize(desc)).unwrap(),
+                        None => writeln!(out, "      {}  {}", sanitize(&h.name), sanitize(&h.type_display)).unwrap(),
+                    }
+                }
+            }
         }
     }
 
@@ -190,6 +207,46 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
         out.push_str("\nErrors:\n");
         for resp in &errors {
             writeln!(out, "  {} {}", sanitize(&resp.status_code), sanitize(&resp.description)).unwrap();
+        }
+    }
+
+    if !endpoint.links.is_empty() {
+        out.push_str("\nLinks:\n");
+        for link in &endpoint.links {
+            writeln!(out, "  {} -> {}", sanitize(&link.name), sanitize(&link.operation_id)).unwrap();
+            if let Some(ref desc) = link.description {
+                writeln!(out, "    {}", sanitize(desc)).unwrap();
+            }
+            for param in &link.parameters {
+                writeln!(out, "    {}", sanitize(param)).unwrap();
+            }
+            if let Some(ref cmd) = link.drill_command {
+                writeln!(out, "    {}", sanitize(cmd)).unwrap();
+            }
+        }
+    }
+
+    if !endpoint.callbacks.is_empty() {
+        out.push_str("\nCallbacks:\n");
+        for cb in &endpoint.callbacks {
+            for op in &cb.operations {
+                writeln!(
+                    out,
+                    "  {} -> {} {}",
+                    sanitize(&cb.name),
+                    sanitize(&op.method),
+                    sanitize(&op.url_expression)
+                ).unwrap();
+                if let Some(ref schema) = op.body_schema {
+                    writeln!(out, "    Body: {}", sanitize(schema)).unwrap();
+                }
+                if !op.responses.is_empty() {
+                    let codes: Vec<String> = op.responses.iter()
+                        .map(|r| sanitize(&r.status_code))
+                        .collect();
+                    writeln!(out, "    Responses: {}", codes.join(", ")).unwrap();
+                }
+            }
         }
     }
 
@@ -257,10 +314,22 @@ fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Fi
         if f.read_only {
             flags.push("read-only");
         }
+        if f.write_only {
+            flags.push("write-only");
+        }
+        if f.deprecated {
+            flags.push("DEPRECATED");
+        }
         let flag_str = if flags.is_empty() {
             String::new()
         } else {
             format!("({})", flags.join(", "))
+        };
+
+        let constraints_str = if f.constraints.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", f.constraints.join(" "))
         };
 
         let enums = if f.enum_values.is_empty() {
@@ -271,13 +340,27 @@ fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Fi
         };
 
         let desc = sanitize(f.description.as_deref().unwrap_or(""));
+
+        if !f.nested_fields.is_empty() {
+            writeln!(
+                out,
+                "  {:<nw$}  {}:",
+                sanitize(&f.name),
+                sanitize(&f.type_display),
+                nw = max_name,
+            ).unwrap();
+            render_schema_fields(out, &f.nested_fields, 4);
+            continue;
+        }
+
         writeln!(
             out,
-            "  {:<nw$}  {:<tw$}  {:<20}  {}{}",
+            "  {:<nw$}  {:<tw$}  {:<20}  {}{}{}",
             sanitize(&f.name),
             sanitize(&f.type_display),
             flag_str,
             desc,
+            constraints_str,
             enums,
             nw = max_name,
             tw = max_type,
@@ -319,6 +402,12 @@ pub fn render_schema_detail(
         writeln!(out, "Schema: {} (expanded)", sanitize(&model.name)).unwrap();
     } else {
         writeln!(out, "Schema: {}", sanitize(&model.name)).unwrap();
+    }
+
+    if let Some(ref title) = model.title {
+        if title != &model.name {
+            writeln!(out, "Title: {}", sanitize(title)).unwrap();
+        }
     }
 
     if let Some(ref desc) = model.description {
@@ -434,10 +523,22 @@ fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Fie
         if f.read_only {
             flags.push("read-only");
         }
+        if f.write_only {
+            flags.push("write-only");
+        }
+        if f.deprecated {
+            flags.push("DEPRECATED");
+        }
         let flag_str = if flags.is_empty() {
             String::new()
         } else {
             format!("({})", flags.join(", "))
+        };
+
+        let constraints_str = if f.constraints.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", f.constraints.join(" "))
         };
 
         let enums = if f.enum_values.is_empty() {
@@ -463,12 +564,13 @@ fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Fie
         } else {
             writeln!(
                 out,
-                "{}{:<nw$}  {:<tw$}  {:<20}  {}{}",
+                "{}{:<nw$}  {:<tw$}  {:<20}  {}{}{}",
                 prefix,
                 sanitize(&f.name),
                 sanitize(&f.type_display),
                 flag_str,
                 desc,
+                constraints_str,
                 enums,
                 nw = max_name,
                 tw = max_type,
@@ -477,12 +579,79 @@ fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Fie
     }
 }
 
+pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry], is_tty: bool) -> String {
+    let mut out = String::new();
+    if callbacks.is_empty() {
+        out.push_str("Callbacks: (none)\n");
+        return out;
+    }
+    writeln!(out, "Callbacks ({} total):", callbacks.len()).unwrap();
+    for cb in callbacks {
+        let op_count = cb.operations.len();
+        let op_label = if op_count == 1 { "operation" } else { "operations" };
+        writeln!(
+            out,
+            "  {} ({} {})  (on {} {})",
+            sanitize(&cb.name),
+            op_count,
+            op_label,
+            sanitize(&cb.defined_on_method),
+            sanitize(&cb.defined_on_path)
+        ).unwrap();
+    }
+    if is_tty {
+        out.push_str("\nDrill deeper:\n");
+        out.push_str("  phyllotaxis callbacks <name>\n");
+    }
+    out
+}
+
+pub fn render_callback_detail(cb: &crate::models::resource::CallbackEntry, is_tty: bool) -> String {
+    let mut out = String::new();
+    writeln!(out, "Callback: {}", sanitize(&cb.name)).unwrap();
+    writeln!(
+        out,
+        "Defined on: {} {}",
+        sanitize(&cb.defined_on_method),
+        sanitize(&cb.defined_on_path)
+    ).unwrap();
+
+    for op in &cb.operations {
+        writeln!(out, "\n  {} {}", sanitize(&op.method), sanitize(&op.url_expression)).unwrap();
+        if let Some(ref schema) = op.body_schema {
+            writeln!(out, "    Body: {}", sanitize(schema)).unwrap();
+        }
+        if !op.responses.is_empty() {
+            out.push_str("    Responses:\n");
+            for r in &op.responses {
+                writeln!(out, "      {}  {}", sanitize(&r.status_code), sanitize(&r.description)).unwrap();
+            }
+        }
+    }
+
+    if is_tty {
+        let schema_names: Vec<&str> = cb.operations.iter()
+            .filter_map(|op| op.body_schema.as_deref())
+            .filter(|s| *s != "inline object")
+            .collect();
+        if !schema_names.is_empty() {
+            out.push_str("\nDrill deeper:\n");
+            for name in schema_names {
+                writeln!(out, "  phyllotaxis schemas {}", sanitize(name)).unwrap();
+            }
+        }
+    }
+
+    out
+}
+
 pub fn render_search(results: &crate::commands::search::SearchResults, is_tty: bool) -> String {
     let mut out = String::new();
 
     let has_any = !results.resources.is_empty()
         || !results.endpoints.is_empty()
-        || !results.schemas.is_empty();
+        || !results.schemas.is_empty()
+        || !results.callbacks.is_empty();
 
     if !has_any {
         writeln!(out, "No results found for \"{}\".", results.term).unwrap();
@@ -526,6 +695,21 @@ pub fn render_search(results: &crate::commands::search::SearchResults, is_tty: b
         out.push_str("\nSchemas:\n");
         for s in &results.schemas {
             writeln!(out, "  {}", sanitize(&s.name)).unwrap();
+        }
+    }
+
+    if !results.callbacks.is_empty() {
+        out.push_str("\nCallbacks:\n");
+        for cb in &results.callbacks {
+            writeln!(
+                out,
+                "  {}  (on {})",
+                sanitize(&cb.name),
+                sanitize(&cb.defined_on_path)
+            ).unwrap();
+            if is_tty {
+                writeln!(out, "    phyllotaxis callbacks {}", sanitize(&cb.name)).unwrap();
+            }
         }
     }
 
@@ -690,6 +874,7 @@ mod tests {
             auth_schemes: vec!["bearerAuth".to_string()],
             resource_count: 3,
             schema_count: 4,
+            callback_count: 0,
         };
         let output = render_overview(&data, true);
         assert!(output.contains("API: Petstore API"), "Missing title");
@@ -715,6 +900,7 @@ mod tests {
             auth_schemes: vec![],
             resource_count: 0,
             schema_count: 0,
+            callback_count: 0,
         };
         let output = render_overview(&data, true);
         assert!(!output.contains("Auth:"), "Auth line should be omitted");
@@ -730,6 +916,7 @@ mod tests {
             auth_schemes: vec![],
             resource_count: 0,
             schema_count: 0,
+            callback_count: 0,
         };
         let output = render_overview(&data, true);
         assert!(output.contains("A simple API"), "Missing description");
@@ -750,6 +937,7 @@ mod tests {
             auth_schemes: vec![],
             resource_count: 0,
             schema_count: 0,
+            callback_count: 0,
         };
         let output = render_overview(&data, true);
         assert!(output.contains("Variables:"), "Missing variables section");
@@ -814,6 +1002,8 @@ mod tests {
                     request_body: None,
                     responses: vec![],
                     security_schemes: vec![],
+                    callbacks: vec![],
+                    links: vec![],
                     drill_deeper: vec![],
                 },
                 Endpoint {
@@ -828,6 +1018,8 @@ mod tests {
                     request_body: None,
                     responses: vec![],
                     security_schemes: vec![],
+                    callbacks: vec![],
+                    links: vec![],
                     drill_deeper: vec![],
                 },
             ],
@@ -874,6 +1066,7 @@ mod tests {
 
         let model = SchemaModel {
             name: "Pet".to_string(),
+            title: None,
             description: Some("A pet in the store".to_string()),
             fields: vec![
                 Field {
@@ -883,6 +1076,9 @@ mod tests {
                     optional: false,
                     nullable: false,
                     read_only: true,
+                    write_only: false,
+                    deprecated: false,
+                    constraints: vec![],
                     description: Some("Unique identifier".to_string()),
                     enum_values: vec![],
                     default_value: None,
@@ -897,6 +1093,9 @@ mod tests {
                     optional: true,
                     nullable: false,
                     read_only: false,
+                    write_only: false,
+                    deprecated: false,
+                    constraints: vec![],
                     description: None,
                     enum_values: vec!["available".to_string(), "sold".to_string()],
                     default_value: None,
@@ -926,6 +1125,7 @@ mod tests {
 
         let model = SchemaModel {
             name: "Pet".to_string(),
+            title: None,
             description: None,
             fields: vec![
                 Field {
@@ -935,6 +1135,9 @@ mod tests {
                     optional: false,
                     nullable: false,
                     read_only: false,
+                    write_only: false,
+                    deprecated: false,
+                    constraints: vec![],
                     description: None,
                     enum_values: vec![],
                     default_value: None,
@@ -949,6 +1152,9 @@ mod tests {
                     optional: true,
                     nullable: false,
                     read_only: false,
+                    write_only: false,
+                    deprecated: false,
+                    constraints: vec![],
                     description: None,
                     enum_values: vec![],
                     default_value: None,
@@ -962,6 +1168,9 @@ mod tests {
                             optional: false,
                             nullable: false,
                             read_only: true,
+                            write_only: false,
+                            deprecated: false,
+                            constraints: vec![],
                             description: None,
                             enum_values: vec![],
                             default_value: None,
@@ -989,6 +1198,7 @@ mod tests {
 
         let model = SchemaModel {
             name: "PetOrOwner".to_string(),
+            title: None,
             description: None,
             fields: vec![],
             composition: Some(Composition::OneOf(vec!["Pet".to_string(), "Owner".to_string()])),
@@ -1024,6 +1234,9 @@ mod tests {
                     optional: false,
                     nullable: false,
                     read_only: false,
+                    write_only: false,
+                    deprecated: false,
+                    constraints: vec![],
                     description: Some("Pet name".to_string()),
                     enum_values: vec![],
                     default_value: None,
@@ -1041,15 +1254,21 @@ mod tests {
                     description: "Created".to_string(),
                     schema_ref: Some("Pet".to_string()),
                     example: None,
+                    headers: vec![],
+                    links: vec![],
                 },
                 Response {
                     status_code: "400".to_string(),
                     description: "Invalid input".to_string(),
                     schema_ref: None,
                     example: None,
+                    headers: vec![],
+                    links: vec![],
                 },
             ],
             security_schemes: vec!["bearerAuth".to_string()],
+            callbacks: vec![],
+            links: vec![],
             drill_deeper: vec![],
         };
 
@@ -1084,6 +1303,8 @@ mod tests {
             request_body: None,
             responses: vec![],
             security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
             drill_deeper: vec!["phyllotaxis schemas Pet".to_string()],
         };
 
@@ -1111,6 +1332,8 @@ mod tests {
             request_body: None,
             responses: vec![],
             security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
             drill_deeper: vec!["phyllotaxis schemas Pet".to_string()],
         };
 
@@ -1137,6 +1360,8 @@ mod tests {
             request_body: None,
             responses: vec![],
             security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
             drill_deeper: vec![],
         };
 
@@ -1161,6 +1386,7 @@ mod tests {
                 resource_slug: "pets".to_string(),
             }],
             schemas: vec![],
+            callbacks: vec![],
         };
 
         let output = render_search(&results, true);
@@ -1185,6 +1411,7 @@ mod tests {
                 resource_slug: "".to_string(),
             }],
             schemas: vec![],
+            callbacks: vec![],
         };
 
         let output = render_search(&results, true);
@@ -1208,6 +1435,7 @@ mod tests {
                 resource_slug: "pets".to_string(),
             }],
             schemas: vec![],
+            callbacks: vec![],
         };
 
         let output = render_search(&results, false);
@@ -1215,5 +1443,329 @@ mod tests {
             output.contains("phyllotaxis resources pets GET /pets/{id}"),
             "Drill command should appear even when piped (not TTY)"
         );
+    }
+
+    // ─── Task 15: write_only, deprecated, constraints rendering ───
+
+    #[test]
+    fn test_render_write_only_flag() {
+        use crate::models::resource::Field;
+        use crate::models::schema::SchemaModel;
+
+        let model = SchemaModel {
+            name: "Test".to_string(),
+            title: None,
+            description: None,
+            fields: vec![Field {
+                name: "password".to_string(),
+                type_display: "string".to_string(),
+                required: true,
+                optional: false,
+                nullable: false,
+                read_only: false,
+                write_only: true,
+                deprecated: false,
+                description: None,
+                enum_values: vec![],
+                constraints: vec![],
+                default_value: None,
+                example: None,
+                nested_schema_name: None,
+                nested_fields: vec![],
+            }],
+            composition: None,
+            discriminator: None,
+            external_docs: None,
+        };
+        let output = render_schema_detail(&model, false, false);
+        assert!(output.contains("write-only"), "Missing write-only flag, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_render_deprecated_field_flag() {
+        use crate::models::resource::Field;
+        use crate::models::schema::SchemaModel;
+
+        let model = SchemaModel {
+            name: "Test".to_string(),
+            title: None,
+            description: None,
+            fields: vec![Field {
+                name: "legacy_code".to_string(),
+                type_display: "string".to_string(),
+                required: false,
+                optional: true,
+                nullable: false,
+                read_only: false,
+                write_only: false,
+                deprecated: true,
+                description: None,
+                enum_values: vec![],
+                constraints: vec![],
+                default_value: None,
+                example: None,
+                nested_schema_name: None,
+                nested_fields: vec![],
+            }],
+            composition: None,
+            discriminator: None,
+            external_docs: None,
+        };
+        let output = render_schema_detail(&model, false, false);
+        assert!(output.contains("DEPRECATED"), "Missing DEPRECATED flag, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_render_constraints_inline() {
+        use crate::models::resource::Field;
+        use crate::models::schema::SchemaModel;
+
+        let model = SchemaModel {
+            name: "Test".to_string(),
+            title: None,
+            description: None,
+            fields: vec![Field {
+                name: "username".to_string(),
+                type_display: "string".to_string(),
+                required: true,
+                optional: false,
+                nullable: false,
+                read_only: false,
+                write_only: false,
+                deprecated: false,
+                description: Some("Unique username".to_string()),
+                enum_values: vec![],
+                constraints: vec!["min:3".to_string(), "max:32".to_string(), "pattern:^[a-zA-Z0-9_-]+$".to_string()],
+                default_value: None,
+                example: None,
+                nested_schema_name: None,
+                nested_fields: vec![],
+            }],
+            composition: None,
+            discriminator: None,
+            external_docs: None,
+        };
+        let output = render_schema_detail(&model, false, false);
+        assert!(output.contains("min:3"), "Missing min:3, got:\n{}", output);
+        assert!(output.contains("max:32"), "Missing max:32, got:\n{}", output);
+        assert!(output.contains("pattern:"), "Missing pattern, got:\n{}", output);
+    }
+
+    // ─── Task 16: Response headers rendering ───
+
+    #[test]
+    fn test_render_response_headers() {
+        use crate::models::resource::*;
+
+        let endpoint = Endpoint {
+            method: "GET".to_string(),
+            path: "/users".to_string(),
+            summary: None,
+            description: None,
+            is_deprecated: false,
+            is_alpha: false,
+            external_docs: None,
+            parameters: vec![],
+            request_body: None,
+            responses: vec![Response {
+                status_code: "200".to_string(),
+                description: "OK".to_string(),
+                schema_ref: None,
+                example: None,
+                headers: vec![
+                    ResponseHeader {
+                        name: "X-Total-Count".to_string(),
+                        type_display: "integer".to_string(),
+                        description: Some("Total count".to_string()),
+                    },
+                ],
+                links: vec![],
+            }],
+            security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
+            drill_deeper: vec![],
+        };
+
+        let output = render_endpoint_detail(&endpoint, false);
+        assert!(output.contains("X-Total-Count"), "Missing header name, got:\n{}", output);
+        assert!(output.contains("integer"), "Missing header type, got:\n{}", output);
+    }
+
+    // ─── Task 17: Links rendering ───
+
+    #[test]
+    fn test_render_links_section() {
+        use crate::models::resource::*;
+
+        let endpoint = Endpoint {
+            method: "POST".to_string(),
+            path: "/users".to_string(),
+            summary: None,
+            description: None,
+            is_deprecated: false,
+            is_alpha: false,
+            external_docs: None,
+            parameters: vec![],
+            request_body: None,
+            responses: vec![Response {
+                status_code: "201".to_string(),
+                description: "Created".to_string(),
+                schema_ref: None,
+                example: None,
+                headers: vec![],
+                links: vec![ResponseLink {
+                    name: "GetCreatedUser".to_string(),
+                    operation_id: "getUser".to_string(),
+                    parameters: vec!["userId = $response.body#/id".to_string()],
+                    description: None,
+                    drill_command: Some("phyllotaxis resources users GET /users/{userId}".to_string()),
+                }],
+            }],
+            security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![ResponseLink {
+                name: "GetCreatedUser".to_string(),
+                operation_id: "getUser".to_string(),
+                parameters: vec!["userId = $response.body#/id".to_string()],
+                description: None,
+                drill_command: Some("phyllotaxis resources users GET /users/{userId}".to_string()),
+            }],
+            drill_deeper: vec![],
+        };
+
+        let output = render_endpoint_detail(&endpoint, false);
+        assert!(output.contains("Links:"), "Missing Links section, got:\n{}", output);
+        assert!(output.contains("GetCreatedUser"), "Missing link name, got:\n{}", output);
+        assert!(output.contains("getUser"), "Missing operationId, got:\n{}", output);
+        assert!(output.contains("userId = $response.body#/id"), "Missing parameter mapping, got:\n{}", output);
+    }
+
+    // ─── Task 18: Callbacks inline rendering ───
+
+    #[test]
+    fn test_render_callbacks_inline() {
+        use crate::models::resource::*;
+
+        let endpoint = Endpoint {
+            method: "POST".to_string(),
+            path: "/notifications/subscribe".to_string(),
+            summary: None,
+            description: None,
+            is_deprecated: false,
+            is_alpha: false,
+            external_docs: None,
+            parameters: vec![],
+            request_body: None,
+            responses: vec![],
+            security_schemes: vec![],
+            callbacks: vec![CallbackEntry {
+                name: "onEvent".to_string(),
+                defined_on_operation_id: Some("subscribeNotifications".to_string()),
+                defined_on_method: "POST".to_string(),
+                defined_on_path: "/notifications/subscribe".to_string(),
+                operations: vec![CallbackOperation {
+                    method: "POST".to_string(),
+                    url_expression: "{$request.query.callbackUrl}/events".to_string(),
+                    summary: Some("Event notification callback".to_string()),
+                    body_schema: Some("EventPayload".to_string()),
+                    responses: vec![
+                        CallbackResponse { status_code: "200".to_string(), description: "Acknowledged".to_string() },
+                    ],
+                }],
+            }],
+            links: vec![],
+            drill_deeper: vec![],
+        };
+
+        let output = render_endpoint_detail(&endpoint, false);
+        assert!(output.contains("Callbacks:"), "Missing Callbacks section, got:\n{}", output);
+        assert!(output.contains("onEvent"), "Missing callback name, got:\n{}", output);
+        assert!(output.contains("EventPayload"), "Missing body schema, got:\n{}", output);
+        assert!(output.contains("{$request.query.callbackUrl}/events"), "Missing URL expression, got:\n{}", output);
+    }
+
+    // ─── Task 19: Schema title rendering ───
+
+    #[test]
+    fn test_render_schema_title_shown_when_different() {
+        use crate::models::schema::SchemaModel;
+
+        let model = SchemaModel {
+            name: "GeoLocation".to_string(),
+            title: Some("Geographic Location".to_string()),
+            description: Some("GPS coordinates".to_string()),
+            fields: vec![],
+            composition: None,
+            discriminator: None,
+            external_docs: None,
+        };
+
+        let output = render_schema_detail(&model, false, false);
+        assert!(output.contains("Schema: GeoLocation"), "Missing schema name, got:\n{}", output);
+        assert!(output.contains("Geographic Location"), "Missing title, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_render_schema_title_hidden_when_same_as_name() {
+        use crate::models::schema::SchemaModel;
+
+        let model = SchemaModel {
+            name: "User".to_string(),
+            title: Some("User".to_string()),
+            description: None,
+            fields: vec![],
+            composition: None,
+            discriminator: None,
+            external_docs: None,
+        };
+
+        let output = render_schema_detail(&model, false, false);
+        assert!(!output.contains("Title:"), "Title should be hidden when same as name, got:\n{}", output);
+    }
+
+    // ─── Task 22: Callback list/detail rendering ───
+
+    #[test]
+    fn test_render_callback_list() {
+        use crate::models::resource::*;
+        let callbacks = vec![
+            CallbackEntry {
+                name: "onEvent".to_string(),
+                defined_on_operation_id: Some("subscribeNotifications".to_string()),
+                defined_on_method: "POST".to_string(),
+                defined_on_path: "/notifications/subscribe".to_string(),
+                operations: vec![],
+            },
+        ];
+        let output = render_callback_list(&callbacks, true);
+        assert!(output.contains("Callbacks"), "Missing header");
+        assert!(output.contains("onEvent"), "Missing callback name");
+        assert!(output.contains("phyllotaxis callbacks <name>"), "Missing drill hint");
+    }
+
+    #[test]
+    fn test_render_callback_detail() {
+        use crate::models::resource::*;
+        let cb = CallbackEntry {
+            name: "onEvent".to_string(),
+            defined_on_operation_id: Some("subscribeNotifications".to_string()),
+            defined_on_method: "POST".to_string(),
+            defined_on_path: "/notifications/subscribe".to_string(),
+            operations: vec![CallbackOperation {
+                method: "POST".to_string(),
+                url_expression: "{$request.query.callbackUrl}/events".to_string(),
+                summary: None,
+                body_schema: Some("EventPayload".to_string()),
+                responses: vec![
+                    CallbackResponse { status_code: "200".to_string(), description: "OK".to_string() },
+                ],
+            }],
+        };
+        let output = render_callback_detail(&cb, false);
+        assert!(output.contains("Callback: onEvent"), "Missing callback name, got:\n{}", output);
+        assert!(output.contains("POST /notifications/subscribe"), "Missing defined-on line, got:\n{}", output);
+        assert!(output.contains("EventPayload"), "Missing body schema, got:\n{}", output);
+        assert!(output.contains("200"), "Missing response code, got:\n{}", output);
     }
 }

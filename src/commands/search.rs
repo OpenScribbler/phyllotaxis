@@ -3,11 +3,18 @@ use crate::commands::schemas::list_schemas;
 use crate::models::resource::slugify;
 
 #[derive(Debug, serde::Serialize)]
+pub struct CallbackMatch {
+    pub name: String,
+    pub defined_on_path: String,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct SearchResults {
     pub term: String,
     pub resources: Vec<ResourceMatch>,
     pub endpoints: Vec<EndpointMatch>,
     pub schemas: Vec<SchemaMatch>,
+    pub callbacks: Vec<CallbackMatch>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -130,11 +137,26 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
         .map(|name| SchemaMatch { name })
         .collect();
 
+    // Search callbacks
+    let all_callbacks = crate::commands::callbacks::list_all_callbacks(api);
+    let callbacks: Vec<CallbackMatch> = all_callbacks
+        .into_iter()
+        .filter(|cb| {
+            cb.name.to_lowercase().contains(&term_lower)
+                || cb.defined_on_path.to_lowercase().contains(&term_lower)
+        })
+        .map(|cb| CallbackMatch {
+            name: cb.name,
+            defined_on_path: cb.defined_on_path,
+        })
+        .collect();
+
     SearchResults {
         term: term.to_string(),
         resources,
         endpoints,
         schemas,
+        callbacks,
     }
 }
 

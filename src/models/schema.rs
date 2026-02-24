@@ -8,6 +8,7 @@ pub struct DiscriminatorInfo {
 #[derive(Debug, serde::Serialize)]
 pub struct SchemaModel {
     pub name: String,
+    pub title: Option<String>,
     pub description: Option<String>,
     pub fields: Vec<super::resource::Field>,
     pub composition: Option<Composition>,

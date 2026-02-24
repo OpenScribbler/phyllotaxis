@@ -9,6 +9,7 @@ pub struct OverviewData {
     pub auth_schemes: Vec<String>,
     pub resource_count: usize,
     pub schema_count: usize,
+    pub callback_count: usize,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -75,6 +76,8 @@ pub fn build(loaded: &LoadedSpec) -> OverviewData {
         .map(|c| c.schemas.len())
         .unwrap_or(0);
 
+    let callback_count = crate::commands::callbacks::list_all_callbacks(&loaded.api).len();
+
     OverviewData {
         title,
         description,
@@ -83,5 +86,6 @@ pub fn build(loaded: &LoadedSpec) -> OverviewData {
         auth_schemes,
         resource_count,
         schema_count,
+        callback_count,
     }
 }
