@@ -6,6 +6,8 @@ struct SchemaDetailJson<'a> {
     name: &'a str,
     title: Option<&'a str>,
     description: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_type: Option<&'a str>,
     composition: Option<CompositionJson>,
     discriminator: Option<DiscriminatorJson<'a>>,
     fields: Vec<FieldJson<'a>>,
@@ -313,6 +315,7 @@ pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, is_tty: 
         name: &model.name,
         title: model.title.as_deref(),
         description: model.description.as_deref(),
+        base_type: model.base_type.as_deref(),
         composition,
         discriminator,
         fields: convert_fields(&model.fields),
@@ -431,6 +434,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
         let v = parse_json(&render_schema_detail(&model, false));
         assert!(v["composition"].is_null());
@@ -494,6 +498,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
         let v = parse_json(&render_schema_detail(&model_with_title, false));
         assert_eq!(v["title"], "Geographic Location", "JSON should include title");

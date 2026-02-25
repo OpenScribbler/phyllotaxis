@@ -265,11 +265,10 @@ fn render_param_section(
     title: &str,
     params: &[&crate::models::resource::Parameter],
 ) {
-    writeln!(out, "\n{}:", title).unwrap();
     if params.is_empty() {
-        out.push_str("  (none)\n");
         return;
     }
+    writeln!(out, "\n{}:", title).unwrap();
     let max_name = params.iter().map(|p| p.name.len()).max().unwrap_or(0);
     for p in params {
         let req = if p.required { "required" } else { "optional" };
@@ -293,12 +292,30 @@ fn render_param_section(
     }
 }
 
+fn compute_max_flag_width(fields: &[crate::models::resource::Field]) -> usize {
+    fields
+        .iter()
+        .map(|f| {
+            let mut flags = Vec::new();
+            if f.required { flags.push("required"); }
+            if f.optional { flags.push("optional"); }
+            if f.nullable { flags.push("nullable"); }
+            if f.read_only { flags.push("read-only"); }
+            if f.write_only { flags.push("write-only"); }
+            if f.deprecated { flags.push("DEPRECATED"); }
+            if flags.is_empty() { 0 } else { format!("({})", flags.join(", ")).len() }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Field]) {
     if fields.is_empty() {
         return;
     }
     let max_name = fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
     let max_type = fields.iter().map(|f| f.type_display.len()).max().unwrap_or(0);
+    let max_flag = compute_max_flag_width(fields);
 
     for f in fields {
         let mut flags = Vec::new();
@@ -355,7 +372,7 @@ fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Fi
 
         writeln!(
             out,
-            "  {:<nw$}  {:<tw$}  {:<20}  {}{}{}",
+            "  {:<nw$}  {:<tw$}  {:<fw$}  {}{}{}",
             sanitize(&f.name),
             sanitize(&f.type_display),
             flag_str,
@@ -364,6 +381,7 @@ fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Fi
             enums,
             nw = max_name,
             tw = max_type,
+            fw = max_flag,
         ).unwrap();
     }
 }
@@ -398,10 +416,16 @@ pub fn render_schema_detail(
     let mut out = String::new();
 
     // Header
-    if expanded {
-        writeln!(out, "Schema: {} (expanded)", sanitize(&model.name)).unwrap();
-    } else {
-        writeln!(out, "Schema: {}", sanitize(&model.name)).unwrap();
+    match (&model.base_type, expanded) {
+        (_, true) => {
+            writeln!(out, "Schema: {} (expanded)", sanitize(&model.name)).unwrap();
+        }
+        (Some(bt), false) => {
+            writeln!(out, "Schema: {} ({})", sanitize(&model.name), bt).unwrap();
+        }
+        (None, false) => {
+            writeln!(out, "Schema: {}", sanitize(&model.name)).unwrap();
+        }
     }
 
     if let Some(ref title) = model.title {
@@ -508,6 +532,7 @@ fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Fie
     let prefix = " ".repeat(indent);
     let max_name = fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
     let max_type = fields.iter().map(|f| f.type_display.len()).max().unwrap_or(0);
+    let max_flag = compute_max_flag_width(fields);
 
     for f in fields {
         let mut flags = Vec::new();
@@ -564,7 +589,7 @@ fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Fie
         } else {
             writeln!(
                 out,
-                "{}{:<nw$}  {:<tw$}  {:<20}  {}{}{}",
+                "{}{:<nw$}  {:<tw$}  {:<fw$}  {}{}{}",
                 prefix,
                 sanitize(&f.name),
                 sanitize(&f.type_display),
@@ -574,6 +599,7 @@ fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Fie
                 enums,
                 nw = max_name,
                 tw = max_type,
+                fw = max_flag,
             ).unwrap();
         }
     }
@@ -660,6 +686,22 @@ pub fn render_search(results: &crate::commands::search::SearchResults, is_tty: b
 
     writeln!(out, "Results for \"{}\":", results.term).unwrap();
 
+    // Summary counts
+    let mut counts = Vec::new();
+    if !results.resources.is_empty() {
+        counts.push(format!("{} resource(s)", results.resources.len()));
+    }
+    if !results.endpoints.is_empty() {
+        counts.push(format!("{} endpoint(s)", results.endpoints.len()));
+    }
+    if !results.schemas.is_empty() {
+        counts.push(format!("{} schema(s)", results.schemas.len()));
+    }
+    if !results.callbacks.is_empty() {
+        counts.push(format!("{} callback(s)", results.callbacks.len()));
+    }
+    writeln!(out, "Found {}", counts.join(", ")).unwrap();
+
     if !results.resources.is_empty() {
         out.push_str("\nResources:\n");
         let max_slug = results.resources.iter().map(|r| r.slug.len()).max().unwrap_or(0);
@@ -674,10 +716,15 @@ pub fn render_search(results: &crate::commands::search::SearchResults, is_tty: b
         let max_path = results.endpoints.iter().map(|e| e.path.len()).max().unwrap_or(0);
         for e in &results.endpoints {
             let summary = sanitize(e.summary.as_deref().unwrap_or(""));
+            let reason = e
+                .matched_on
+                .as_ref()
+                .map(|r| format!("  ({})", sanitize(r)))
+                .unwrap_or_default();
             writeln!(
                 out,
-                "  {:<7} {:<width$}  {}",
-                sanitize(&e.method), sanitize(&e.path), summary, width = max_path
+                "  {:<7} {:<width$}  {}{}",
+                sanitize(&e.method), sanitize(&e.path), summary, reason, width = max_path
             ).unwrap();
             if !e.resource_slug.is_empty() {
                 writeln!(
@@ -694,7 +741,13 @@ pub fn render_search(results: &crate::commands::search::SearchResults, is_tty: b
     if !results.schemas.is_empty() {
         out.push_str("\nSchemas:\n");
         for s in &results.schemas {
-            writeln!(out, "  {}", sanitize(&s.name)).unwrap();
+            match s.matched_field.as_deref() {
+                Some(field) => {
+                    writeln!(out, "  {} (field: {})", sanitize(&s.name), sanitize(field))
+                        .unwrap()
+                }
+                None => writeln!(out, "  {}", sanitize(&s.name)).unwrap(),
+            }
         }
     }
 
@@ -768,7 +821,14 @@ pub fn render_auth(model: &crate::commands::auth::AuthModel, is_tty: bool) -> St
 
     if is_tty {
         out.push_str("\nDrill deeper:\n");
-        out.push_str("  phyllotaxis resources    Browse endpoints by resource group\n");
+        for scheme in &model.schemes {
+            writeln!(
+                out,
+                "  phyllotaxis search {}    Find endpoints using this scheme",
+                sanitize(&scheme.name)
+            )
+            .unwrap();
+        }
     }
 
     out
@@ -1107,6 +1167,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
 
         let output = render_schema_detail(&model, false, true);
@@ -1184,6 +1245,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
 
         let output = render_schema_detail(&model, true, true);
@@ -1204,6 +1266,7 @@ mod tests {
             composition: Some(Composition::OneOf(vec!["Pet".to_string(), "Owner".to_string()])),
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
 
         let output = render_schema_detail(&model, false, true);
@@ -1384,6 +1447,7 @@ mod tests {
                 path: "/pets/{id}".to_string(),
                 summary: None,
                 resource_slug: "pets".to_string(),
+                matched_on: None,
             }],
             schemas: vec![],
             callbacks: vec![],
@@ -1409,6 +1473,7 @@ mod tests {
                 path: "/test".to_string(),
                 summary: None,
                 resource_slug: "".to_string(),
+                matched_on: None,
             }],
             schemas: vec![],
             callbacks: vec![],
@@ -1433,6 +1498,7 @@ mod tests {
                 path: "/pets/{id}".to_string(),
                 summary: None,
                 resource_slug: "pets".to_string(),
+                matched_on: None,
             }],
             schemas: vec![],
             callbacks: vec![],
@@ -1476,6 +1542,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
         let output = render_schema_detail(&model, false, false);
         assert!(output.contains("write-only"), "Missing write-only flag, got:\n{}", output);
@@ -1510,6 +1577,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
         let output = render_schema_detail(&model, false, false);
         assert!(output.contains("DEPRECATED"), "Missing DEPRECATED flag, got:\n{}", output);
@@ -1544,6 +1612,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
         let output = render_schema_detail(&model, false, false);
         assert!(output.contains("min:3"), "Missing min:3, got:\n{}", output);
@@ -1699,6 +1768,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
 
         let output = render_schema_detail(&model, false, false);
@@ -1718,6 +1788,7 @@ mod tests {
             composition: None,
             discriminator: None,
             external_docs: None,
+            base_type: None,
         };
 
         let output = render_schema_detail(&model, false, false);

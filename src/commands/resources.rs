@@ -206,6 +206,23 @@ pub fn build_fields(
 
         let enum_values = extract_enum_values(&resolved.schema_kind);
 
+        // For array-of-ref fields, capture the item schema name for --expand support.
+        // Direct $ref properties already have schema_name set, but array wrappers
+        // (type: array, items: { $ref }) are inline Items with schema_name = None.
+        let effective_schema_name = schema_name.map(|s| s.to_string()).or_else(|| {
+            if let openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) =
+                &resolved.schema_kind
+            {
+                if let Some(openapiv3::ReferenceOr::Reference { reference }) =
+                    arr.items.as_ref()
+                {
+                    return spec::schema_name_from_ref(reference.as_str())
+                        .map(|s| s.to_string());
+                }
+            }
+            None
+        });
+
         fields.push(Field {
             name: name.clone(),
             type_display,
@@ -220,7 +237,7 @@ pub fn build_fields(
             constraints: extract_constraints(&resolved.schema_kind),
             default_value: resolved.schema_data.default.clone(),
             example: resolved.schema_data.example.clone(),
-            nested_schema_name: schema_name.map(|s| s.to_string()),
+            nested_schema_name: effective_schema_name,
             nested_fields: Vec::new(),
         });
     }

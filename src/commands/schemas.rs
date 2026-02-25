@@ -119,6 +119,21 @@ pub fn build_schema_model(
         _ => (Vec::new(), None),
     };
 
+    // Compute base_type for schemas that aren't Object/composition — gives the LLM
+    // a type label for primitive, array, and `not` schemas that would otherwise be opaque.
+    let base_type = match &schema.schema_kind {
+        openapiv3::SchemaKind::Type(t) => match t {
+            openapiv3::Type::String(s) if s.enumeration.is_empty() => Some("string"),
+            openapiv3::Type::Integer(i) if i.enumeration.is_empty() => Some("integer"),
+            openapiv3::Type::Number(_) => Some("number"),
+            openapiv3::Type::Boolean(_) => Some("boolean"),
+            openapiv3::Type::Array(_) => Some("array"),
+            _ => None, // Object and enum variants are covered by fields/composition
+        },
+        openapiv3::SchemaKind::Not { .. } => Some("not"),
+        _ => None, // AllOf/OneOf/AnyOf already have composition
+    };
+
     // Extract discriminator (lives on schema_data, independent of schema_kind)
     let discriminator = schema.schema_data.discriminator.as_ref().map(|d| {
         let mapping = d
@@ -154,6 +169,7 @@ pub fn build_schema_model(
         composition,
         discriminator,
         external_docs: None,
+        base_type: base_type.map(|s| s.to_string()),
     })
 }
 
@@ -407,5 +423,54 @@ mod tests {
         let api = load_kitchen_sink_api();
         let model = build_schema_model(&api, "User", false, 5).unwrap();
         assert!(model.title.is_none(), "User has no title, got: {:?}", model.title);
+    }
+
+    #[test]
+    fn test_expand_array_of_ref() {
+        let api = load_kitchen_sink_api();
+        // Error.details is array of ErrorDetail — should inline ErrorDetail fields when expanded
+        let model = build_schema_model(&api, "Error", true, 5).unwrap();
+        let details_field = model.fields.iter().find(|f| f.name == "details");
+        assert!(details_field.is_some(), "Error should have a details field");
+        let details = details_field.unwrap();
+        assert!(
+            !details.nested_fields.is_empty(),
+            "With --expand, details (ErrorDetail[]) should have nested_fields populated. \
+             Got type_display={:?}, nested_schema_name={:?}",
+            details.type_display,
+            details.nested_schema_name
+        );
+        // Spot-check that ErrorDetail's fields appear
+        let field_names: Vec<&str> = details.nested_fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            field_names.contains(&"field") || field_names.contains(&"reason"),
+            "Expanded details should contain ErrorDetail fields (field, reason), got: {:?}",
+            field_names
+        );
+    }
+
+    #[test]
+    fn test_non_admin_role_has_base_type() {
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "NonAdminRole", false, 5).unwrap();
+        assert_eq!(
+            model.base_type.as_deref(),
+            Some("not"),
+            "NonAdminRole (a `not` schema) should have base_type='not', got: {:?}",
+            model.base_type
+        );
+        assert!(model.fields.is_empty(), "not schema should have no fields");
+        assert!(model.composition.is_none(), "not schema should have no composition");
+    }
+
+    #[test]
+    fn test_object_schema_has_no_base_type() {
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "User", false, 5).unwrap();
+        assert!(
+            model.base_type.is_none(),
+            "Object schemas should not have base_type, got: {:?}",
+            model.base_type
+        );
     }
 }

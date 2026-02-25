@@ -14,6 +14,8 @@ pub struct SchemaModel {
     pub composition: Option<Composition>,
     pub discriminator: Option<DiscriminatorInfo>,
     pub external_docs: Option<super::resource::ExternalDoc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_type: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
