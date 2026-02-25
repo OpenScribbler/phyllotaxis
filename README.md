@@ -57,15 +57,18 @@ This matters for LLM-assisted workflows. Instead of stuffing an entire spec into
 | `phyllotaxis schemas` | List all schemas |
 | `phyllotaxis schemas <name>` | Schema detail — fields, types, composition |
 | `phyllotaxis auth` | Authentication schemes and usage |
-| `phyllotaxis search <term>` | Search across resources, endpoints, and schemas |
+| `phyllotaxis search <term>` | Search across resources, endpoints, schemas, and callbacks |
+| `phyllotaxis callbacks` | List all webhook callbacks |
+| `phyllotaxis callbacks <name>` | Callback detail — operations, URL expressions, schemas |
 | `phyllotaxis init` | Auto-detect spec files and write config |
+| `phyllotaxis completions <shell>` | Generate shell completions (bash, zsh, fish, powershell, elvish) |
 
 ### Global Flags
 
 ```
---spec <path>   Override spec file location
---json          Output in JSON format
---expand        Recursively inline nested schemas (max depth 5)
+--spec <name|path>   Override spec file (named spec from config, or file path)
+--json               Output in JSON format
+--expand             Recursively inline nested schemas (max depth 5)
 ```
 
 ## Progressive Disclosure Levels
@@ -156,6 +159,29 @@ Related schemas:
   phyllotaxis schemas Owner
 ```
 
+### Callbacks
+
+```bash
+$ phyllotaxis callbacks
+Callbacks:
+  onPetAdded    Defined on: POST /pets
+
+Drill deeper:
+  phyllotaxis callbacks <name>
+```
+
+```bash
+$ phyllotaxis callbacks onPetAdded
+Callback: onPetAdded
+Defined on: POST /pets
+
+Operations:
+  POST {$request.body#/callbackUrl}
+    Body: PetEvent
+    Responses:
+      200 Callback received
+```
+
 ### Schema Expansion
 
 ```bash
@@ -185,11 +211,22 @@ $ phyllotaxis --json schemas Pet | jq '.fields[].name'
 "owner"
 ```
 
+## Fuzzy Matching
+
+Mistype a resource, schema, or callback name and phyllotaxis suggests close matches:
+
+```bash
+$ phyllotaxis resources pet
+Error: Resource 'pet' not found.
+Did you mean:
+  phyllotaxis resources pets
+```
+
 ## Spec Discovery
 
 Phyllotaxis finds your spec file in four ways (in priority order):
 
-1. **`--spec` flag** — explicit path, always wins
+1. **`--spec` flag** — named spec from config or file path, always wins
 2. **`PHYLLOTAXIS_SPEC` env var** — set to a file path; errors if set but the file doesn't exist, silently ignored if empty
 3. **`.phyllotaxis.yaml` config** — created by `phyllotaxis init`, checked in the current directory and parents
 4. **Auto-detect** — scans for `*.yaml`/`*.yml`/`*.json` files containing `openapi:` in the first 200 bytes
@@ -204,6 +241,34 @@ Found spec candidates:
 Select a spec file (enter number) or type a path: 1
 Initialized. Run `phyllotaxis` to see your API overview.
 ```
+
+For non-interactive setup (CI, scripts), pass the path directly:
+
+```bash
+$ phyllotaxis init --spec-path ./api/openapi.yaml
+```
+
+### Multi-Spec Projects
+
+If your project has multiple API specs, use named specs in `.phyllotaxis.yaml`:
+
+```yaml
+specs:
+  public: ./api/public.yaml
+  internal: ./api/internal.yaml
+default: public
+variables:
+  tenant: my-org
+  env: staging
+```
+
+Then select a spec by name:
+
+```bash
+$ phyllotaxis --spec internal resources
+```
+
+The `variables` map substitutes server URL template variables (e.g., `{tenant}` becomes `my-org` in base URL output).
 
 ## Compatibility
 
@@ -227,6 +292,7 @@ phyllotaxis/
 │   │   ├── schemas.rs       # Schema listing, detail, expansion
 │   │   ├── auth.rs          # Security scheme extraction
 │   │   ├── search.rs        # Cross-type search
+│   │   ├── callbacks.rs     # Webhook callback extraction
 │   │   └── init.rs          # Framework detection, interactive setup
 │   ├── models/
 │   │   ├── resource.rs      # Data structs + utility functions
@@ -236,7 +302,8 @@ phyllotaxis/
 │       └── json.rs          # JSON renderers
 └── tests/
     ├── fixtures/
-    │   └── petstore.yaml    # Test fixture
+    │   ├── petstore.yaml    # Test fixture
+    │   └── kitchen-sink.yaml # Comprehensive edge-case fixture
     ├── fixture_sanity.rs    # Fixture parse validation
     ├── integration_tests.rs # End-to-end CLI tests
     └── lib_tests.rs         # Library API tests
@@ -246,7 +313,7 @@ phyllotaxis/
 
 ```bash
 cargo build      # Debug build
-cargo test       # Run all 148 tests (unit + integration)
+cargo test       # Run all tests (unit + integration)
 cargo build -r   # Release build
 ```
 
