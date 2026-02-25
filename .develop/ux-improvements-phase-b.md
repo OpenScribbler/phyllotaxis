@@ -1,111 +1,312 @@
-# Phase B Analysis: ux-improvements
-
-Generated: 2026-02-23
-Tasks analyzed: 6
-
----
-
-## Task 1: Add `drill_deeper` to `Endpoint`, `schema_ref` to `RequestBody`
-
-- [x] **Implicit deps:** None. This is the root task.
-- [x] **Missing context:** The plan lists three literal sites to update after adding the fields (text.rs tests, json.rs test). It misses one production literal site: `extract_resource_groups` in `src/commands/resources.rs` (lines 56–68) constructs an `Endpoint` struct literal used for the lightweight group-listing path. It will fail to compile and must also get `drill_deeper: vec![]`. The plan's coverage of literal sites is incomplete.
-- [x] **Hidden blockers:** None external. The compiler will surface every missed site as a build error, so TDD via `cargo test` catches them.
-- [x] **Cross-task conflicts:** Task 1 touches `src/models/resource.rs` exclusively for the struct definition change. Tasks 2, 3, 4 touch different files and do not conflict with each other or with Task 1. The only ordering requirement is that Tasks 2/3/4 cannot compile until Task 1's struct changes are committed.
-- [x] **Success criteria:** `cargo build` passes with no compile errors. `cargo test` passes with no failures. `Endpoint` has a `pub drill_deeper: Vec<String>` field. `RequestBody` has a `pub schema_ref: Option<String>` field. All `Endpoint { ... }` and `RequestBody { ... }` struct literals in the entire codebase compile, including the one in `extract_resource_groups` at `resources.rs:56`.
-
-**Actions taken:**
-- Documented the missing literal site in `extract_resource_groups`. The plan's "Struct literals to update" section lists only test sites; the production literal in `resources.rs` is unmentioned. Added it to the plan below.
-
----
-
-## Task 2: Populate `drill_deeper` in `get_endpoint_detail`
-
-- [x] **Implicit deps:** Depends on Task 1 (struct fields must exist). Stated correctly in the plan.
-- [x] **Missing context:** The plan's Step 1 pseudocode references `schema_ref_name.clone()` as if it is already a named local variable in `extract_request_body`. It is not. In the current code, the `Reference` arm of the `match schema_ref` block (line 441–449) resolves the reference to get a `&Schema` but discards the `sname: &str` value. The implementer must capture that name before the match arm closes. Concretely: the `Reference` arm must be restructured to bind both the `sname` and the resolved schema, then store `Some(sname.to_string())` for use in the `RequestBody` constructor. The plan's pseudocode implies the name is already available, which will confuse an agent reading only the plan. The plan also does not address the `Item` arm: when the schema is inline (not a `$ref`), there is no schema name to capture; `schema_ref` stays `None`. This is correct behavior but needs to be stated explicitly.
-- [x] **Hidden blockers:** None external. The petstore fixture covers the concrete-ref case (POST /pets uses `$ref: Pet`) and the oneOf case (POST /animals). The deduplication test requires a synthetic endpoint; the plan notes this and it is feasible with inline structs.
-- [x] **Cross-task conflicts:** Task 2 only modifies `src/commands/resources.rs`. Tasks 3 and 4 only modify `src/render/text.rs` and `src/render/json.rs` respectively. No file overlap after Task 1.
-- [x] **Success criteria:** All four test cases listed in the plan pass. `get_endpoint_detail` for `GET /pets/{id}` returns `drill_deeper == ["phyllotaxis schemas Pet"]`. `get_endpoint_detail` for `DELETE /pets/{id}` (204, no schema) returns `drill_deeper == []`. `get_endpoint_detail` for `POST /animals` (oneOf body with Pet/Owner options) returns `drill_deeper` containing both schema commands with no duplicates. `extract_request_body` for POST /pets sets `schema_ref: Some("Pet")` on the returned `RequestBody`.
-
-**Actions taken:**
-- Documented the missing `schema_ref_name` extraction context. Updated the plan's Task 2 Step 1 section with a clarifying note.
-
----
-
-## Task 3: Text renderer — emit drill-deeper for endpoint detail
-
-- [x] **Implicit deps:** Depends on Task 1 (the `drill_deeper` field must exist on `Endpoint`). Does not depend on Task 2 at compile time; the field just needs to exist and be accessible. Tests can use hardcoded `drill_deeper: vec![...]` literals. Stated correctly.
-- [x] **Missing context:** None significant. `sanitize` is a private function in `text.rs`; using it in the new block is fine since it's in the same module. The insertion point ("after the existing Errors block") is unambiguous — the `Errors` section ends at line 194 of `text.rs`. The `is_tty` guard is correctly specified.
-- [x] **Hidden blockers:** None. The existing `render_endpoint_detail` function in `text.rs` does not currently emit any "Drill deeper" block, so there is no existing code to conflict with.
-- [x] **Cross-task conflicts:** Task 3 and Task 5 both modify `src/render/text.rs`, but they touch different functions: Task 3 touches `render_endpoint_detail` (line 82), Task 5 touches `render_search` (line 473). If run in parallel (e.g., two branches merged), a merge conflict is possible but not a semantic conflict — the changes are in separate functions and can be cleanly merged.
-- [x] **Success criteria:** All three test cases pass. `render_endpoint_detail` with a non-empty `drill_deeper` and `is_tty = true` includes a "Drill deeper:" header and each command on its own line with two-space indent. With `is_tty = false`, no "Drill deeper:" section appears. With `drill_deeper: vec![]` and `is_tty = true`, no "Drill deeper:" section appears. Existing `test_render_endpoint_detail_post_pets` continues to pass (it uses `drill_deeper: vec![]` after the Task 1 struct update).
-
-**Actions taken:**
-- Noted the text.rs cross-task conflict with Task 5 (same file, different functions). No plan changes required — the sequencing table already flags this.
-
----
-
-## Task 4: JSON renderer — assert `drill_deeper` in output
-
-- [x] **Implicit deps:** Depends on Task 1 (the `drill_deeper` field must exist and derive `Serialize`). Does not depend on Task 2. The plan states this correctly. No code change to `json.rs` production code is needed — `serialize(endpoint, is_tty)` will automatically include the field once Task 1 is done.
-- [x] **Missing context:** The plan says "No code change needed" for production code, which is accurate. However, it does not note that the `Endpoint` literal in `test_all_json_outputs_parse` (line 422–434 of `json.rs`) will be a compile error until `drill_deeper: vec![]` is added — this is Task 1's responsibility but lands in Task 4's test file. An agent working on Task 4 after Task 1 will find the file already compiling. If working concurrently, the Task 4 agent must add that field to the literal. The plan should flag this ordering sensitivity more explicitly.
-- [x] **Hidden blockers:** None. The JSON serialization of `Vec<String>` to a JSON array is straightforward via serde derive.
-- [x] **Cross-task conflicts:** Task 4 only touches `src/render/json.rs`. No other task modifies this file (Task 1 only updates a literal in the test section of `json.rs`). If Task 4 is worked before Task 1 fully lands, the agent may need to also add `drill_deeper: vec![]` to the existing endpoint literal in `test_all_json_outputs_parse`. No semantic conflict.
-- [x] **Success criteria:** `test_all_json_outputs_parse` includes `assert!(v["drill_deeper"].is_array())` for the endpoint detail section and passes. The new test `test_endpoint_detail_json_includes_drill_deeper` passes: a `drill_deeper: vec!["phyllotaxis schemas Pet".to_string()]` endpoint serialized via `render_endpoint_detail` yields JSON where `v["drill_deeper"] == ["phyllotaxis schemas Pet"]`.
-
-**Actions taken:**
-- Noted the compile dependency on Task 1's literal update in `json.rs` test. No structural plan change needed, but the ordering sensitivity is documented here.
-
----
-
-## Task 5: Search text renderer — emit full drill-down commands
-
-- [x] **Implicit deps:** None stated and none actual. `EndpointMatch.resource_slug` is already populated (confirmed in `src/commands/search.rs` line 109–113). This is render-only.
-- [x] **Missing context:** One subtlety: the existing `render_search` function already has a TTY-only "Drill deeper:" block (lines 517–531 of `text.rs`) that emits `phyllotaxis resources <slug>` and `phyllotaxis schemas <name>` commands for resources and schemas. Task 5's endpoint drill commands are emitted unconditionally (regardless of `is_tty`), as an inline second line per endpoint. These two blocks are structurally separate and do not conflict. However, the plan does not explain that the existing drill-deeper block remains untouched — an agent might wonder if the new per-endpoint lines replace or supplement the bottom-of-output block. The answer is: supplement. The plan could be clearer on this.
-- [x] **Hidden blockers:** None. The `resource_slug` field already exists on `EndpointMatch` and is always populated (falls back to empty string if no tag, which the `!e.resource_slug.is_empty()` guard handles).
-- [x] **Cross-task conflicts:** Same file conflict with Task 3 (both touch `src/render/text.rs`), but different functions (`render_search` vs `render_endpoint_detail`). If applied on separate branches, the merge is clean. No logical conflict.
-- [x] **Success criteria:** All three test cases pass. A search result with `resource_slug: "pets"` emits `"    phyllotaxis resources pets GET /pets/{id}"` on the line immediately following the endpoint line. A result with `resource_slug: ""` does not emit the command. The command appears with `is_tty = false`. Existing search tests (`test_search_pet`, `test_search_no_results`, etc.) continue to pass — those test the search logic, not the renderer, but if any call `render_search` they will now include drill lines in output.
-
-**Actions taken:**
-- Documented the relationship between the new per-endpoint drill lines and the existing TTY drill-deeper block at the bottom of `render_search`. No plan edit required.
-
----
-
-## Task 6: `PHYLLOTAXIS_SPEC` environment variable
-
-- [x] **Implicit deps:** None. Fully independent of all other tasks.
-- [x] **Missing context:** The insertion point is described clearly ("between the flag block and the config-file block"). In `src/spec.rs`, that is after line 98 (end of the `--spec` flag block) and before line 101 (start of the config-file block). The `bail!` macro and `PathBuf` are already imported. The `start_dir` parameter is available in scope. The plan is complete for implementation purposes. One note: `std::env::var` returns `Err` for unset variables and `Ok(val)` for set ones; the plan's empty-string check is correct and handles `export PHYLLOTAXIS_SPEC=""` gracefully.
-- [x] **Hidden blockers:** Test isolation is the main hazard. `std::env::set_var` / `remove_var` mutate global process state and are inherently racy under Rust's parallel test runner. The plan flags this and recommends `--test-threads=1` if flakiness occurs. An alternative is `std::sync::Mutex`-based test serialization within the module (e.g., a static `ENV_MUTEX`), which avoids affecting all tests. Either approach works; the plan's `--test-threads=1` recommendation is the simpler path and is acceptable for a small test suite.
-- [x] **Cross-task conflicts:** Task 6 only modifies `src/spec.rs`. No other task touches this file. Zero conflict risk.
-- [x] **Success criteria:** All five test cases listed in the plan pass. `resolve_spec_path(None, &no_config, dir)` with `PHYLLOTAXIS_SPEC` set to a valid file path returns `Ok(that_path)`. With `PHYLLOTAXIS_SPEC` set and `--spec` flag also provided, the flag wins. With `PHYLLOTAXIS_SPEC` set and a config file present, env var wins over config. With `PHYLLOTAXIS_SPEC` pointing to a nonexistent path, `Err` is returned with a message containing `"PHYLLOTAXIS_SPEC"`. With `PHYLLOTAXIS_SPEC=""`, resolution falls through to config/auto-detect. All existing `resolve_spec_path` tests continue to pass (they do not set `PHYLLOTAXIS_SPEC`, so they are unaffected assuming env is clean in CI).
-
-**Actions taken:**
-- None required. Plan is sufficient for implementation.
-
----
-
-## Plan updates made
-
-### Task 1 — Missing literal site added
-
-The plan's "Struct literals to update" bullet list omits one production site. Updated that section:
-
-> **Struct literals to update:**
-> - `src/commands/resources.rs` — `extract_resource_groups` function, ~line 56: add `drill_deeper: vec![]`
-> - `src/render/text.rs` tests — `Endpoint` literals: add `drill_deeper: vec![]`; `RequestBody` literals: add `schema_ref: None`
-> - `src/render/json.rs` tests — `Endpoint` literal: add `drill_deeper: vec![]`
-
-### Task 2 — Clarified `schema_ref_name` extraction
-
-Added a note in Step 1 clarifying that `schema_ref_name` does not exist as a variable in the current `extract_request_body` and must be extracted from the `Reference` match arm:
-
-> **Implementation note:** In the current code, `extract_request_body` matches `schema_ref` (line 439) but the `Reference` arm resolves to a `&Schema` without retaining the name. Step 1 requires restructuring this arm to bind the name before resolving the schema. Concretely: save `sname.to_string()` as `Option<String>` before the match, then pass it to `RequestBody.schema_ref`. The `Item` arm (inline schema, no `$ref`) sets `schema_ref: None`.
+# UX Improvements — Phase B Analysis
+**Plan:** `docs/plans/2026-02-24-ux-improvements-implementation.md`
+**Date:** 2026-02-24
+**Verified against:** source files at HEAD (commit bb527a9)
 
 ---
 
 ## Summary
 
-- Total tasks: 6
-- Dependencies added: 0 (all stated dependencies were correct; no hidden cross-task deps found)
-- New beads created: 0
-- Plan updates made: 2 (missing literal site in Task 1; missing context note in Task 2)
-- Success criteria added: 6 (one per task, all measurable)
+The plan is largely sound but contains six concrete issues ranging from a blocking
+compile error to incorrect test assertions and one phantom type that doesn't exist. None
+are showstoppers that require redesigning a task — all are fixable in a few lines. The
+most serious is Issue T5-1: a unit test references `SchemaListModel`, a type that does
+not exist anywhere in the codebase.
+
+---
+
+## Task 1: Search indexes schema field names
+
+### Verification
+- [x] `SchemaMatch { pub name: String }` exists at `src/commands/search.rs:35–37` — struct shape confirmed.
+- [x] `find_schema()` exists at `src/commands/schemas.rs:20–52` with signature
+  `fn find_schema<'a>(api: &'a openapiv3::OpenAPI, name: &str) -> Option<&'a openapiv3::Schema>`.
+  The call in the Task 1 implementation snippet is compatible.
+- [x] `spec::schema_name_from_ref()` exists at `src/spec.rs:244–251` with signature
+  `pub fn schema_name_from_ref(reference: &str) -> Option<&str>`. Used in the AllOf
+  property walk — mirrors the pattern at `schemas.rs:31`.
+- [x] `SchemaKind::AllOf { all_of }` is a real variant in openapiv3 2.2.0.
+- [x] Fixture: `User` schema at `kitchen-sink.yaml:920` has an `email` field.
+  `CreateUserRequest` at line 984 has an `email` field. `PatchUserRequest` at line 1015
+  has an `email` field. All three test assertions are correct.
+- [x] Test `test_search_field_name_does_not_shadow_name_match` searches `"user"`. The
+  name `"User"` contains `"user"` case-insensitively, so the name-match branch fires
+  first and `matched_field` is `None`. Assertion is correct.
+- [x] The existing `json.rs` test at line 455 constructs `SearchResults` with
+  `schemas: vec![]` — no struct-init change needed for Task 1 alone. (Task 5 changes
+  `SearchResults` itself, handled there.)
+
+### Issues
+- [x] No blockers. Line reference "~133–138" for the schema search block is accurate
+  (`search.rs:133–138`). Verify before editing in case of prior edits.
+
+---
+
+## Task 2: `--expand` inlines array-of-ref fields
+
+### Verification
+- [x] `build_fields` is at `src/commands/resources.rs:113–229`. Signature:
+  `pub fn build_fields(api: &openapiv3::OpenAPI, schema: &openapiv3::Schema, required_fields: &[String]) -> Vec<Field>`.
+  The plan's implementation is compatible with this signature.
+- [x] Root cause confirmed at `resources.rs:173–175`: `ReferenceOr::Item(boxed)` branch
+  sets `schema_name = None`, so `nested_schema_name` is always `None` for inline schemas
+  including array-of-ref fields. Plan's diagnosis is correct.
+- [x] `ArrayType.items` is typed `Option<ReferenceOr<Box<Schema>>>` in openapiv3 2.2.0.
+  The plan's pattern `Some(openapiv3::ReferenceOr::Reference { reference }) = &arr.items`
+  binds `reference: &String`. The call `spec::schema_name_from_ref(reference.as_str())`
+  is consistent with the existing usage at `resources.rs:298`. No type mismatch.
+- [x] `ErrorDetail` at `kitchen-sink.yaml:1476–1484` has fields `field`, `reason`, and
+  `value`. The test assertion checks for `"field"` or `"reason"` in the nested field
+  names — correct.
+
+### Issues
+- [ ] **ISSUE T2-1 (note — `value` field type):** `ErrorDetail.value` has no `type:`
+  property in the fixture, only a `description:`. This parses as
+  `SchemaKind::Any(AnySchema { .. })`, and `format_type_display` returns `"object"` for
+  it. The field appears in `nested_fields` with `type_display = "object"`. The test
+  assertion only checks for the names `"field"` or `"reason"`, so this does not break
+  the test. No action required — just be aware when inspecting expanded output manually.
+
+---
+
+## Task 3: Search results show match reason
+
+### Verification
+- [x] `EndpointMatch` at `search.rs:27–32` — confirmed no `matched_on` field yet.
+- [x] `session_token` is a cookie parameter on `GET /users` at `kitchen-sink.yaml:107–110`.
+  The parameter name is exactly `session_token`. Test assertion `Some("parameter: session_token")` is correct.
+- [x] `GET /users` path is `/users`. Test assertion `e.path == "/users"` is correct.
+- [x] `json.rs:render_search` at line 361 calls `serialize(results, is_tty)` directly on
+  `SearchResults`, which derives `Serialize`. The new `matched_on` field on `EndpointMatch`
+  propagates to JSON automatically via `#[serde(skip_serializing_if = "Option::is_none")]`.
+  Plan's claim is correct.
+- [x] Task 1 adds `matched_field` to `SchemaMatch`. Task 3 adds `matched_on` to
+  `EndpointMatch`. These are independent struct changes on different structs — no conflict.
+
+### Issues
+- [ ] **ISSUE T3-1 (silent wrong behavior — variable shadowing, must fix):**
+  The current code at `search.rs:86–92` uses a local variable named `desc_match` for the
+  operation description check. The plan's new parameter loop also uses `desc_match`
+  internally for parameter description matching (the `let desc_match = pdata.description...`
+  line inside the loop). The plan's Implementation Notes section flags this and says to
+  rename the operation-level variable to `op_desc_match` throughout the block. This rename
+  **must be applied** — without it, the outer `desc_match` is shadowed inside the loop,
+  making the `if path_match || summary_match || desc_match || param_match` condition check
+  the wrong variable. The plan's note is correct; the rename is required.
+
+---
+
+## Task 4: Suppress empty param sections + field alignment fix
+
+### Verification
+- [x] `render_param_section` at `text.rs:263–294` unconditionally writes the section
+  header then checks `if params.is_empty()`. Plan's diagnosis is correct.
+- [x] `render_endpoint_detail` at `text.rs:129–133` calls `render_param_section`
+  unconditionally for path and query params. Plan's diagnosis is correct.
+- [x] `POST /users` at `kitchen-sink.yaml:140–186` has no `parameters:` key — confirmed
+  no path or query parameters. The suppression tests are valid.
+- [x] `GET /users/{userId}` at `kitchen-sink.yaml:188–196` declares `userId` as a
+  required path parameter. `test_non_empty_path_params_still_shown` assertion is correct.
+- [x] `CreateUserRequest` (`kitchen-sink.yaml:975–998`): `username` has `minLength: 3`
+  → constraint `min:3`; `password` has `minLength: 8` → constraint `min:8`. Both appear
+  in the POST /users request body. The column alignment test is valid.
+- [x] `render_fields_section` at `text.rs:296–369` has current format string at line
+  356–368 appending `constraints_str` after `desc` without separate alignment. Plan's
+  diagnosis is correct.
+- [x] `render_schema_fields` at `text.rs:507–580` has the same format string pattern
+  at line 565–578. Plan correctly identifies both functions need the same fix.
+
+### Issues
+- [ ] **ISSUE T4-1 (test breakage risk — verify before committing):** After the fix,
+  `render_param_section` is only called when params are non-empty, so any existing test
+  that asserts `stdout.contains("Path Parameters:")` for an endpoint that has no path
+  params will break. The plan's analysis concludes `test_resources_endpoint_get` is safe
+  (it asserts `Query Parameters`, and `GET /pets` has a `limit` query param). This is
+  correct, but the following verification command should be run immediately after
+  implementing the suppression change to confirm no other tests break:
+  ```
+  cargo test -p phyllotaxis
+  ```
+  If any test fails on `"Path Parameters:"`, update the assertion to check for a specific
+  param name instead.
+
+- [ ] **ISSUE T4-2 (column order change — existing `contains` assertions still pass):**
+  The plan moves constraints before description in the output. Any test that does
+  `stdout.contains("some_description  min:3")` would break, but the plan correctly states
+  no position-sensitive tests exist for this. Verify with `grep -rn "min:" tests/` before
+  implementing to be sure.
+
+---
+
+## Task 5: Search result counts + consistent drill-deeper hints
+
+### Verification
+- [x] `SearchResults` at `search.rs:11–18` — confirmed no `endpoint_count` or
+  `schema_count` fields yet.
+- [x] `render_auth` at `text.rs:736–775` — current TTY drill-deeper block at lines
+  769–772 is exactly as the plan shows. Plan target is accurate.
+- [x] `render_schema_list` at `text.rs:371` **already accepts `is_tty: bool`**.
+  The plan says "check whether it currently does" — it does. No signature change needed.
+- [x] `render_schema_list` at `text.rs:383–386` **already has the TTY drill-deeper hint**:
+  ```rust
+  if is_tty {
+      out.push_str("\nDrill deeper:\n");
+      out.push_str("  phyllotaxis schemas <name>\n");
+  }
+  ```
+  The existing test `test_render_schema_list` at `text.rs:1041–1053` already asserts
+  `output.contains("Drill deeper:")` and `output.contains("phyllotaxis schemas <name>")`.
+
+### Issues
+- [ ] **ISSUE T5-1 (blocking compile error — phantom type):** Task 5's Step 1 unit test
+  in the plan (lines 1082–1093) constructs:
+  ```rust
+  use crate::commands::schemas::SchemaListModel;
+  let model = SchemaListModel { schemas: vec!["User".to_string(), "Error".to_string()] };
+  let output = render_schema_list(&model, true);
+  ```
+  **`SchemaListModel` does not exist anywhere in the codebase.** `render_schema_list`
+  takes `&[String]`, not a struct. This test will fail to compile. The correct form is:
+  ```rust
+  let names = vec!["User".to_string(), "Error".to_string()];
+  let output = render_schema_list(&names, true);
+  ```
+  This is the same pattern as the existing `test_render_schema_list` at `text.rs:1042`.
+
+- [ ] **ISSUE T5-2 (redundant — drill-deeper already implemented):** The schema list
+  drill-deeper hint (plan Step 4) is already present in `text.rs:383–386`, and the
+  existing unit test already covers it. The plan's `test_schema_listing_drill_deeper_hint`
+  unit test is redundant. Adding a test with that exact name would be a duplicate of the
+  existing `test_render_schema_list`. Skip Step 4 of Task 5 entirely — nothing to
+  implement or test. The integration test `test_schema_listing_shows_drill_deeper_hint`
+  (which checks that non-TTY output does NOT show the hint) is a valid new test and can
+  be kept.
+
+- [ ] **ISSUE T5-3 (build break — must update json.rs test in same commit):** Adding
+  `endpoint_count: usize` and `schema_count: usize` to `SearchResults` is a struct change.
+  The `json.rs:test_all_json_outputs_parse` at line 455 constructs `SearchResults`
+  directly and will fail to compile until updated. The plan correctly identifies this
+  (Step 2) and instructs adding the two fields with value `0`. This update must be in the
+  same commit as the struct change, not deferred.
+
+---
+
+## Task 6: NonAdminRole base type display
+
+### Verification
+- [x] `NonAdminRole` at `kitchen-sink.yaml:1201–1208` uses `not:` — confirmed. Parses as
+  `SchemaKind::Not { not: Box<ReferenceOr<Schema>> }`. Current `build_schema_model`
+  catch-all `_ => (Vec::new(), None)` matches this, yielding empty fields and no
+  composition. Plan's diagnosis is correct.
+- [x] `SchemaModel` at `models/schema.rs:8–17` — confirmed no `base_type` field yet.
+- [x] `SchemaKind::Not` in openapiv3 2.2.0 is a named-field variant:
+  `Not { not: Box<ReferenceOr<Schema>> }`. The plan's wildcard pattern `Not { .. }` is
+  valid Rust for named-field variants. No compile error.
+- [x] `Type::Boolean` in openapiv3 2.2.0 is `Boolean(BooleanType)` — a tuple variant.
+  The plan uses `openapiv3::SchemaKind::Type(openapiv3::Type::Boolean { .. })` with
+  named-field syntax. **This is wrong syntax for a tuple variant.**
+  See Issue T6-1 below.
+- [x] `render_schema_detail` at `text.rs:391–505` — header block at lines 401–405 is
+  exactly as the plan shows. Modification target is correct.
+
+### Issues
+- [ ] **ISSUE T6-1 (compile error — wrong Boolean pattern syntax):** Task 6 Step 3 uses:
+  ```rust
+  openapiv3::SchemaKind::Type(openapiv3::Type::Boolean { .. }) => Some("boolean".to_string()),
+  ```
+  `Type::Boolean` is a **tuple variant** `Boolean(BooleanType)`, not a struct variant.
+  The `{ .. }` struct-wildcard syntax is invalid for a tuple variant. The correct pattern is:
+  ```rust
+  openapiv3::SchemaKind::Type(openapiv3::Type::Boolean(_)) => Some("boolean".to_string()),
+  ```
+  This matches the exact pattern already used in `resources.rs:294`:
+  `openapiv3::Type::Boolean(_) => "boolean".to_string()`.
+  Without this fix, the `base_type` derivation block will not compile.
+
+- [ ] **ISSUE T6-2 (silent wrong output — `base_type` missing from JSON):** The plan
+  states that `json.rs` picks up `base_type` "automatically via serde". This is incorrect.
+  `json.rs:render_schema_detail` does not serialize `SchemaModel` directly — it builds a
+  local `SchemaDetailJson<'a>` struct (lines 5–14) and manually maps each field from
+  `SchemaModel`. `base_type` is not in `SchemaDetailJson` and is not copied in the
+  constructor at lines 312–326. As a result, `"base_type"` will never appear in JSON
+  output even after the model change. The verification command in the plan
+  (`grep base_type`) would return nothing instead of `"base_type": "not"`.
+  Fix: add `base_type` to `SchemaDetailJson` and populate it:
+  ```rust
+  // In SchemaDetailJson struct:
+  #[serde(skip_serializing_if = "Option::is_none")]
+  base_type: Option<&'a str>,
+
+  // In the constructor (json.rs ~line 312):
+  let json = SchemaDetailJson {
+      // ... existing fields ...
+      base_type: model.base_type.as_deref(),
+  };
+  ```
+
+- [ ] **ISSUE T6-3 (build break — SchemaModel literal changes required):** Adding
+  `pub base_type: Option<String>` to `SchemaModel` means all existing `SchemaModel { ... }`
+  struct literals must include `base_type: None`. The plan correctly identifies this and
+  lists the locations:
+  - `src/render/json.rs:426–434` (first `SchemaModel` literal in `test_all_json_outputs_parse`)
+  - `src/render/json.rs:489–497` (second `SchemaModel` literal)
+  These two are the only struct literal constructions of `SchemaModel` in the codebase
+  (all other usages go through `build_schema_model()` which returns `Option<SchemaModel>`).
+  Both updates must be in the same commit as the struct field addition.
+
+---
+
+## Cross-task conflicts
+
+- [ ] **TC-1 (Tasks 1+3+5 all touch `search.rs` structs):** Task 1 adds `matched_field`
+  to `SchemaMatch`. Task 3 adds `matched_on` to `EndpointMatch`. Task 5 adds
+  `endpoint_count`/`schema_count` to `SearchResults`. These are independent struct changes
+  but all touch `search.rs` and the constructor at the bottom of `search()`. Execution
+  order in the plan (1 then 3 then 5) is safe — each task's changes are additive and
+  non-overlapping structurally.
+
+- [ ] **TC-2 (json.rs test must be updated in Tasks 5 and 6, separately):**
+  `json.rs:test_all_json_outputs_parse` needs two rounds of updates: first when Task 5
+  adds fields to `SearchResults`, then when Task 6 adds `base_type` to `SchemaModel`.
+  Each task's commit must include its corresponding `json.rs` test edit or the build
+  breaks between tasks.
+
+- [ ] **TC-3 (Tasks 3 and 4 both touch `text.rs` rendering but different functions):**
+  Task 3 modifies the endpoint loop inside `render_search`. Task 4 modifies
+  `render_param_section` and `render_fields_section`. These are distinct functions with
+  no overlap. No conflict.
+
+---
+
+## Success criteria audit
+
+| Task | Test | Fixture verified | Assertion correct |
+|------|------|------------------|-------------------|
+| T1 | `test_search_field_name_email` | User, CreateUserRequest, PatchUserRequest have `email` | [x] |
+| T1 | `test_search_field_name_does_not_shadow_name_match` | "user" hits "User" by name | [x] |
+| T2 | `test_expand_array_of_ref` | Error.details = ErrorDetail[]; ErrorDetail has field+reason | [x] |
+| T3 | `test_search_endpoint_match_reason_parameter` | session_token is cookie param on GET /users | [x] |
+| T3 | `test_search_endpoint_match_reason_none_for_path_match` | /users path contains "users" | [x] |
+| T4 | `test_empty_path_params_section_suppressed` | POST /users has no path params | [x] |
+| T4 | `test_empty_query_params_section_suppressed` | POST /users has no query params | [x] |
+| T4 | `test_non_empty_path_params_still_shown` | GET /users/{userId} has userId path param | [x] |
+| T4 | `test_constraint_column_alignment` | username min:3, password min:8 in CreateUserRequest | [x] |
+| T5 | `test_schema_listing_drill_deeper_hint` (unit) | Already implemented — test is redundant | see T5-2 |
+| T5 | `test_auth_drill_deeper_shows_scheme_search_hints` | bearerAuth scheme in model | [x] |
+| T6 | `test_non_admin_role_has_base_type` | NonAdminRole uses `not:` | [x] |
+| T6 | `test_non_admin_role_shows_base_type` | integration checks text output | [x] |
+
+---
+
+## Issue summary (ranked by severity)
+
+| ID | Severity | Task | Description | Fix |
+|----|----------|------|-------------|-----|
+| T5-1 | **Blocking compile error** | T5 | `SchemaListModel` does not exist | Use `&[String]` directly |
+| T6-1 | **Compile error** | T6 | `Type::Boolean { .. }` is wrong syntax for tuple variant | Use `Type::Boolean(_)` |
+| T6-2 | **Silent wrong output** | T6 | `base_type` never reaches JSON output | Add field to `SchemaDetailJson` |
+| T5-2 | **Redundant/duplicate** | T5 | Schema list drill-deeper already live; unit test name conflicts | Skip Step 4 implementation; keep integration test |
+| T5-3 | **Build break between tasks** | T5 | `json.rs` test needs new `SearchResults` fields | Update in same commit |
+| T6-3 | **Build break between tasks** | T6 | `json.rs` tests need `base_type: None` | Update in same commit |
+| T3-1 | **Silent wrong behavior** | T3 | `desc_match` shadowing | Rename to `op_desc_match` (plan notes this) |
+| T4-1 | **Test breakage risk** | T4 | Existing tests may assert `"Path Parameters:"` for empty-param endpoints | Run `cargo test` after first impl step |
