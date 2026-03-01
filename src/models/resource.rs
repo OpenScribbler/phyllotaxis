@@ -53,6 +53,9 @@ pub struct RequestBody {
     pub options: Vec<String>,
     pub schema_ref: Option<String>,
     pub example: Option<serde_json::Value>,
+    /// When the body is `type: array` with `items.$ref`, this holds the item type name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub array_item_type: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

@@ -90,7 +90,7 @@ fn test_render_overview_text_direct() {
         .expect("load_spec failed");
 
     let data = phyllotaxis::commands::overview::build(&loaded);
-    let output = phyllotaxis::render::text::render_overview(&data, true);
+    let output = phyllotaxis::render::text::render_overview(&data, "phyllotaxis", true);
 
     assert!(
         output.contains("API: Petstore API"),

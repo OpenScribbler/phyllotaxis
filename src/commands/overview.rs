@@ -8,6 +8,8 @@ pub struct OverviewData {
     pub server_variables: Vec<ServerVar>,
     pub auth_schemes: Vec<String>,
     pub resource_count: usize,
+    pub endpoint_count: usize,
+    pub path_count: usize,
     pub schema_count: usize,
     pub callback_count: usize,
 }
@@ -67,7 +69,10 @@ pub fn build(loaded: &LoadedSpec) -> OverviewData {
         .map(|c| c.security_schemes.keys().cloned().collect())
         .unwrap_or_default();
 
-    let resource_count = crate::commands::resources::extract_resource_groups(&loaded.api).len();
+    let resource_groups = crate::commands::resources::extract_resource_groups(&loaded.api);
+    let resource_count = resource_groups.len();
+    let endpoint_count: usize = resource_groups.iter().map(|g| g.endpoints.len()).sum();
+    let path_count = loaded.api.paths.paths.len();
 
     let schema_count = loaded
         .api
@@ -85,6 +90,8 @@ pub fn build(loaded: &LoadedSpec) -> OverviewData {
         server_variables,
         auth_schemes,
         resource_count,
+        endpoint_count,
+        path_count,
         schema_count,
         callback_count,
     }

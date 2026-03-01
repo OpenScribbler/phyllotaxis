@@ -17,20 +17,22 @@ pub fn list_schemas(api: &openapiv3::OpenAPI) -> Vec<String> {
 }
 
 /// Looks up a schema by name (case-sensitive first, then case-insensitive fallback).
+/// Returns the canonical key name from the spec alongside the schema.
 pub fn find_schema<'a>(
     api: &'a openapiv3::OpenAPI,
     name: &str,
-) -> Option<&'a openapiv3::Schema> {
+) -> Option<(&'a str, &'a openapiv3::Schema)> {
     let schemas = &api.components.as_ref()?.schemas;
 
     // Exact match first
-    if let Some(ref_or) = schemas.get(name) {
+    if let Some((key, ref_or)) = schemas.get_key_value(name) {
         return match ref_or {
-            openapiv3::ReferenceOr::Item(s) => Some(s),
+            openapiv3::ReferenceOr::Item(s) => Some((key.as_str(), s)),
             openapiv3::ReferenceOr::Reference { reference } => {
                 let sname = spec::schema_name_from_ref(reference)?;
-                match schemas.get(sname)? {
-                    openapiv3::ReferenceOr::Item(s) => Some(s),
+                let (resolved_key, resolved_ref) = schemas.get_key_value(sname)?;
+                match resolved_ref {
+                    openapiv3::ReferenceOr::Item(s) => Some((resolved_key.as_str(), s)),
                     _ => None,
                 }
             }
@@ -42,7 +44,7 @@ pub fn find_schema<'a>(
     for (key, ref_or) in schemas {
         if key.to_lowercase() == lower {
             return match ref_or {
-                openapiv3::ReferenceOr::Item(s) => Some(s),
+                openapiv3::ReferenceOr::Item(s) => Some((key.as_str(), s)),
                 _ => None,
             };
         }
@@ -74,7 +76,7 @@ pub fn build_schema_model(
     expand: bool,
     max_depth: usize,
 ) -> Option<SchemaModel> {
-    let schema = find_schema(api, name)?;
+    let (canonical_name, schema) = find_schema(api, name)?;
 
     let description = schema.schema_data.description.clone();
     let title = schema.schema_data.title.clone();
@@ -162,7 +164,7 @@ pub fn build_schema_model(
     };
 
     Some(SchemaModel {
-        name: name.to_string(),
+        name: canonical_name.to_string(),
         title,
         description,
         fields,
@@ -212,7 +214,7 @@ fn expand_fields(
                 if !visited.contains(schema_name) {
                     visited.insert(schema_name.clone());
 
-                    if let Some(nested_schema) = find_schema(api, schema_name) {
+                    if let Some((_, nested_schema)) = find_schema(api, schema_name) {
                         let required = match &nested_schema.schema_kind {
                             openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => {
                                 obj.required.clone()
@@ -270,7 +272,9 @@ mod tests {
     #[test]
     fn test_find_schema_case_insensitive() {
         let api = load_petstore_api();
-        assert!(find_schema(&api, "pet").is_some());
+        let result = find_schema(&api, "pet");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, "Pet", "Should return canonical name 'Pet' for input 'pet'");
     }
 
     #[test]
