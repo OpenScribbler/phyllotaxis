@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "phyllotaxis", about = "Progressive disclosure for OpenAPI specs")]
+#[command(name = "phyllotaxis", version, about = "Progressive disclosure for OpenAPI specs")]
 struct Cli {
     /// Override spec file location
     #[arg(long, global = true)]
@@ -18,6 +18,10 @@ struct Cli {
     #[arg(long, global = true)]
     expand: bool,
 
+    /// Cap the number of related schemas shown in schema detail
+    #[arg(long, global = true)]
+    related_limit: Option<usize>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -25,6 +29,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// List all resource groups, or drill into a specific resource
+    #[command(visible_alias = "endpoints")]
     Resources {
         /// Resource name (slug) to drill into
         name: Option<String>,
@@ -44,6 +49,9 @@ enum Commands {
     Search {
         /// Search term
         term: String,
+        /// Limit results per category
+        #[arg(long)]
+        limit: Option<usize>,
     },
     /// List all callbacks, or show detail for a specific callback
     Callbacks {
@@ -68,6 +76,17 @@ fn json_error(msg: &str) -> String {
     serde_json::json!({"error": msg}).to_string()
 }
 
+/// Extract the binary filename from argv[0], falling back to "phyllotaxis".
+fn detect_bin_name() -> String {
+    std::env::args()
+        .next()
+        .as_deref()
+        .and_then(|s| std::path::Path::new(s).file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("phyllotaxis")
+        .to_string()
+}
+
 fn main() -> std::process::ExitCode {
     human_panic::setup_panic!();
     let cli = Cli::parse();
@@ -89,6 +108,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     use std::io::IsTerminal;
 
     let cwd = std::env::current_dir().expect("cannot determine current directory");
+    let bin_name = detect_bin_name();
 
     let is_tty = std::io::stdout().is_terminal()
         && std::env::var("NO_COLOR").is_err()
@@ -100,8 +120,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         use clap::CommandFactory;
         use clap_complete::generate;
         let mut cmd = Cli::command();
-        let bin_name = cmd.get_name().to_string();
-        generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
+        let comp_name = cmd.get_name().to_string();
+        generate(shell, &mut cmd, comp_name, &mut std::io::stdout());
         return Ok(());
     }
 
@@ -118,9 +138,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         None => {
             let data = commands::overview::build(&loaded);
             let output = if cli.json {
-                render::json::render_overview(&data, is_tty)
+                render::json::render_overview(&data, &bin_name, is_tty)
             } else {
-                render::text::render_overview(&data, is_tty)
+                render::text::render_overview(&data, &bin_name, is_tty)
             };
             println!("{}", output);
         }
@@ -128,16 +148,16 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             None => {
                 let groups = commands::resources::extract_resource_groups(&loaded.api);
                 let output = if cli.json {
-                    render::json::render_resource_list(&groups, is_tty)
+                    render::json::render_resource_list(&groups, &bin_name, is_tty)
                 } else {
-                    render::text::render_resource_list(&groups, is_tty)
+                    render::text::render_resource_list(&groups, &bin_name, is_tty)
                 };
                 println!("{}", output);
             }
             Some(name) => {
                 if let (Some(method), Some(path)) = (method, path) {
                     // Level 3: endpoint detail
-                    match commands::resources::get_endpoint_detail(&loaded.api, method, path, cli.expand) {
+                    match commands::resources::get_endpoint_detail(&loaded.api, method, path, cli.expand, &bin_name) {
                         Some(ep) => {
                             let output = if cli.json {
                                 render::json::render_endpoint_detail(&ep, is_tty)
@@ -164,9 +184,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     match commands::resources::get_resource_detail(&loaded.api, name) {
                         Some(group) => {
                             let output = if cli.json {
-                                render::json::render_resource_detail(&group, is_tty)
+                                render::json::render_resource_detail(&group, &bin_name, is_tty)
                             } else {
-                                render::text::render_resource_detail(&group, is_tty)
+                                render::text::render_resource_detail(&group, &bin_name, is_tty)
                             };
                             println!("{}", output);
                         }
@@ -180,7 +200,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                                 if !suggestions.is_empty() {
                                     eprintln!("Did you mean:");
                                     for s in &suggestions {
-                                        eprintln!("  phyllotaxis resources {}", s);
+                                        eprintln!("  {} resources {}", bin_name, s);
                                     }
                                 }
                             }
@@ -194,9 +214,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             None => {
                 let names = commands::schemas::list_schemas(&loaded.api);
                 let output = if cli.json {
-                    render::json::render_schema_list(&names, is_tty)
+                    render::json::render_schema_list(&names, &bin_name, is_tty)
                 } else {
-                    render::text::render_schema_list(&names, is_tty)
+                    render::text::render_schema_list(&names, &bin_name, is_tty)
                 };
                 println!("{}", output);
             }
@@ -209,9 +229,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 ) {
                     Some(model) => {
                         let output = if cli.json {
-                            render::json::render_schema_detail(&model, is_tty)
+                            render::json::render_schema_detail(&model, &bin_name, is_tty)
                         } else {
-                            render::text::render_schema_detail(&model, cli.expand, is_tty)
+                            render::text::render_schema_detail(&model, &bin_name, cli.expand, cli.related_limit, is_tty)
                         };
                         println!("{}", output);
                     }
@@ -227,7 +247,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                             if !suggestions.is_empty() {
                                 eprintln!("Did you mean:");
                                 for s in &suggestions {
-                                    eprintln!("  phyllotaxis schemas {}", s);
+                                    eprintln!("  {} schemas {}", bin_name, s);
                                 }
                             }
                         }
@@ -239,18 +259,28 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Commands::Auth) => {
             let model = commands::auth::build_auth_model(&loaded.api);
             let output = if cli.json {
-                render::json::render_auth(&model, is_tty)
+                render::json::render_auth(&model, &bin_name, is_tty)
             } else {
-                render::text::render_auth(&model, is_tty)
+                render::text::render_auth(&model, &bin_name, is_tty)
             };
             println!("{}", output);
         }
-        Some(Commands::Search { term }) => {
-            let results = commands::search::search(&loaded.api, term);
+        Some(Commands::Search { term, limit }) => {
+            let term_trimmed = term.trim();
+            if term_trimmed.is_empty() {
+                if cli.json {
+                    eprintln!("{}", json_error("Please provide a search term."));
+                } else {
+                    eprintln!("Error: Please provide a search term.");
+                    eprintln!("Use '{} resources' or '{} schemas' to list all items.", bin_name, bin_name);
+                }
+                std::process::exit(1);
+            }
+            let results = commands::search::search(&loaded.api, term_trimmed);
             let output = if cli.json {
-                render::json::render_search(&results, is_tty)
+                render::json::render_search(&results, &bin_name, is_tty)
             } else {
-                render::text::render_search(&results, is_tty)
+                render::text::render_search(&results, &bin_name, *limit, is_tty)
             };
             println!("{}", output);
         }
@@ -259,9 +289,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             match name {
                 None => {
                     let output = if cli.json {
-                        render::json::render_callback_list(&callbacks, is_tty)
+                        render::json::render_callback_list(&callbacks, &bin_name, is_tty)
                     } else {
-                        render::text::render_callback_list(&callbacks, is_tty)
+                        render::text::render_callback_list(&callbacks, &bin_name, is_tty)
                     };
                     println!("{}", output);
                 }
@@ -269,9 +299,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     match commands::callbacks::find_callback(&loaded.api, name) {
                         Some(cb) => {
                             let output = if cli.json {
-                                render::json::render_callback_detail(&cb, is_tty)
+                                render::json::render_callback_detail(&cb, &bin_name, is_tty)
                             } else {
-                                render::text::render_callback_detail(&cb, is_tty)
+                                render::text::render_callback_detail(&cb, &bin_name, is_tty)
                             };
                             println!("{}", output);
                         }
@@ -284,7 +314,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                                 if !suggestions.is_empty() {
                                     eprintln!("Did you mean:");
                                     for s in &suggestions {
-                                        eprintln!("  phyllotaxis callbacks {}", s);
+                                        eprintln!("  {} callbacks {}", bin_name, s);
                                     }
                                 }
                             }

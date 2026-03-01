@@ -1,4 +1,4 @@
-use crate::commands::resources::extract_resource_groups;
+use crate::commands::resources::{extract_resource_groups, path_prefix_group_name};
 use crate::commands::schemas::list_schemas;
 use crate::models::resource::slugify;
 
@@ -125,6 +125,7 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
                         .tags
                         .first()
                         .map(|t| slugify(t))
+                        .or_else(|| path_prefix_group_name(path_str))
                         .unwrap_or_default();
 
                     // Only annotate matched_on when the match came from a parameter
@@ -161,7 +162,7 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
         }
 
         // Field name match: look inside the schema's properties
-        if let Some(schema) = crate::commands::schemas::find_schema(api, &name) {
+        if let Some((_, schema)) = crate::commands::schemas::find_schema(api, &name) {
             let field_match = match &schema.schema_kind {
                 openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => obj
                     .properties

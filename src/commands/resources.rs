@@ -94,6 +94,112 @@ pub fn extract_resource_groups(api: &openapiv3::OpenAPI) -> Vec<ResourceGroup> {
     // Sort by slug (BTreeMap is already sorted by key, but key is tag_name not slug)
     let mut result: Vec<ResourceGroup> = groups.into_values().collect();
     result.sort_by(|a, b| a.slug.cmp(&b.slug));
+
+    // Fallback: if no group has endpoints, use path-prefix grouping
+    let has_endpoints = result.iter().any(|g| !g.endpoints.is_empty());
+    if !has_endpoints {
+        return extract_path_prefix_groups(api);
+    }
+
+    result
+}
+
+/// Extract the meaningful first path segment, stripping common API version prefixes.
+/// e.g., "/v1/customers/{id}" → "customers", "/api/v2/orders" → "orders"
+pub(crate) fn path_prefix_group_name(path: &str) -> Option<String> {
+    let segments: Vec<&str> = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    for seg in &segments {
+        // Skip version-like segments and "api" prefix
+        let lower = seg.to_lowercase();
+        if lower == "api"
+            || (lower.starts_with('v') && lower[1..].chars().all(|c| c.is_ascii_digit()))
+        {
+            continue;
+        }
+        // Skip path parameters
+        if seg.starts_with('{') {
+            continue;
+        }
+        return Some(seg.to_string());
+    }
+    None
+}
+
+fn extract_path_prefix_groups(api: &openapiv3::OpenAPI) -> Vec<ResourceGroup> {
+    let mut groups: BTreeMap<String, ResourceGroup> = BTreeMap::new();
+
+    for (path_str, path_item_ref) in &api.paths.paths {
+        let path_item = match path_item_ref {
+            openapiv3::ReferenceOr::Item(item) => item,
+            openapiv3::ReferenceOr::Reference { .. } => continue,
+        };
+
+        let group_name = match path_prefix_group_name(path_str) {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let methods: &[(&str, &Option<openapiv3::Operation>)] = &[
+            ("GET", &path_item.get),
+            ("POST", &path_item.post),
+            ("PUT", &path_item.put),
+            ("DELETE", &path_item.delete),
+            ("PATCH", &path_item.patch),
+            ("HEAD", &path_item.head),
+            ("OPTIONS", &path_item.options),
+            ("TRACE", &path_item.trace),
+        ];
+
+        for &(method, op_opt) in methods {
+            let op = match op_opt {
+                Some(op) => op,
+                None => continue,
+            };
+
+            let is_deprecated = op.deprecated;
+            let is_alpha = matches!(
+                op.extensions.get("x-alpha"),
+                Some(serde_json::Value::Bool(true))
+            );
+
+            let endpoint = Endpoint {
+                method: method.to_string(),
+                path: path_str.clone(),
+                summary: op.summary.clone(),
+                description: op.description.clone(),
+                is_deprecated,
+                is_alpha,
+                external_docs: None,
+                parameters: Vec::new(),
+                request_body: None,
+                responses: Vec::new(),
+                security_schemes: Vec::new(),
+                callbacks: Vec::new(),
+                links: Vec::new(),
+                drill_deeper: Vec::new(),
+            };
+
+            let slug = slugify(&group_name);
+            let group = groups.entry(group_name.clone()).or_insert_with(|| {
+                ResourceGroup {
+                    slug: slug.clone(),
+                    display_name: humanize_tag_name(&group_name),
+                    description: None,
+                    is_deprecated: false,
+                    is_alpha: false,
+                    endpoints: Vec::new(),
+                }
+            });
+            group.endpoints.push(endpoint);
+        }
+    }
+
+    let mut result: Vec<ResourceGroup> = groups.into_values().collect();
+    result.sort_by(|a, b| a.slug.cmp(&b.slug));
     result
 }
 
@@ -414,6 +520,7 @@ fn extract_security(
 fn extract_links_from_response(
     api: &openapiv3::OpenAPI,
     resp: &openapiv3::Response,
+    bin_name: &str,
 ) -> Vec<crate::models::resource::ResponseLink> {
     use crate::models::resource::ResponseLink;
 
@@ -442,7 +549,7 @@ fn extract_links_from_response(
                 })
                 .collect();
 
-            let drill_command = build_link_drill_command(api, &operation_id);
+            let drill_command = build_link_drill_command(api, &operation_id, bin_name);
 
             Some(ResponseLink {
                 name: link_name.clone(),
@@ -458,6 +565,7 @@ fn extract_links_from_response(
 fn build_link_drill_command(
     api: &openapiv3::OpenAPI,
     operation_id: &str,
+    bin_name: &str,
 ) -> Option<String> {
     for (path_str, path_item_ref) in &api.paths.paths {
         let path_item = match path_item_ref {
@@ -476,8 +584,8 @@ fn build_link_drill_command(
                     });
                     if let Some(slug) = slug {
                         return Some(format!(
-                            "phyllotaxis resources {} {} {}",
-                            slug, method, path_str
+                            "{} resources {} {} {}",
+                            bin_name, slug, method, path_str
                         ));
                     }
                 }
@@ -487,7 +595,7 @@ fn build_link_drill_command(
     None
 }
 
-fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation) -> Vec<crate::models::resource::Response> {
+fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation, bin_name: &str) -> Vec<crate::models::resource::Response> {
     use crate::models::resource::{Response, ResponseHeader};
     let mut responses = Vec::new();
     for (status, resp_ref) in &operation.responses.responses {
@@ -509,7 +617,23 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation)
                     openapiv3::ReferenceOr::Reference { reference } => {
                         spec::schema_name_from_ref(reference).map(|s| s.to_string())
                     }
-                    _ => None,
+                    openapiv3::ReferenceOr::Item(schema) => {
+                        match &schema.schema_kind {
+                            openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) => {
+                                match &arr.items {
+                                    Some(openapiv3::ReferenceOr::Reference { reference }) => {
+                                        spec::schema_name_from_ref(reference)
+                                            .map(|s| format!("{}[]", s))
+                                    }
+                                    Some(openapiv3::ReferenceOr::Item(item_schema)) => {
+                                        Some(format!("{}[]", format_type_display(&item_schema.schema_kind)))
+                                    }
+                                    None => Some("array".to_string()),
+                                }
+                            }
+                            _ => None,
+                        }
+                    }
                 });
                 (schema_ref, media.example.clone())
             })
@@ -544,7 +668,7 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation)
             })
             .collect();
 
-        let links = extract_links_from_response(api, resp);
+        let links = extract_links_from_response(api, resp, bin_name);
 
         responses.push(Response {
             status_code,
@@ -555,6 +679,82 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation)
             links,
         });
     }
+
+    // Handle the default response (not included in operation.responses.responses)
+    if let Some(ref default_ref) = operation.responses.default {
+        if let openapiv3::ReferenceOr::Item(resp) = default_ref {
+            let (schema_ref_name, example) = resp
+                .content
+                .get("application/json")
+                .map(|media| {
+                    let schema_ref = media.schema.as_ref().and_then(|sr| match sr {
+                        openapiv3::ReferenceOr::Reference { reference } => {
+                            spec::schema_name_from_ref(reference).map(|s| s.to_string())
+                        }
+                        openapiv3::ReferenceOr::Item(schema) => {
+                            match &schema.schema_kind {
+                                openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) => {
+                                    match &arr.items {
+                                        Some(openapiv3::ReferenceOr::Reference { reference }) => {
+                                            spec::schema_name_from_ref(reference)
+                                                .map(|s| format!("{}[]", s))
+                                        }
+                                        Some(openapiv3::ReferenceOr::Item(item_schema)) => {
+                                            Some(format!("{}[]", format_type_display(&item_schema.schema_kind)))
+                                        }
+                                        None => Some("array".to_string()),
+                                    }
+                                }
+                                _ => None,
+                            }
+                        }
+                    });
+                    (schema_ref, media.example.clone())
+                })
+                .unwrap_or((None, None));
+
+            let headers: Vec<ResponseHeader> = resp
+                .headers
+                .iter()
+                .filter_map(|(name, href)| {
+                    let header = match href {
+                        openapiv3::ReferenceOr::Item(h) => h,
+                        openapiv3::ReferenceOr::Reference { .. } => return None,
+                    };
+                    let type_display = match &header.format {
+                        openapiv3::ParameterSchemaOrContent::Schema(s) => match s {
+                            openapiv3::ReferenceOr::Item(schema) => {
+                                format_type_display(&schema.schema_kind)
+                            }
+                            openapiv3::ReferenceOr::Reference { reference } => {
+                                spec::schema_name_from_ref(reference)
+                                    .unwrap_or("object")
+                                    .to_string()
+                            }
+                        },
+                        _ => "string".to_string(),
+                    };
+                    Some(ResponseHeader {
+                        name: name.clone(),
+                        type_display,
+                        description: header.description.clone(),
+                    })
+                })
+                .collect();
+
+            let links = extract_links_from_response(api, resp, bin_name);
+
+            responses.push(Response {
+                status_code: "default".to_string(),
+                description: resp.description.clone(),
+                schema_ref: schema_ref_name,
+                example,
+                headers,
+                links,
+            });
+        }
+    }
+
     responses
 }
 
@@ -576,7 +776,24 @@ fn merge_parameters(
     for param_ref in all_param_refs {
         let param = match param_ref {
             openapiv3::ReferenceOr::Item(p) => p,
-            openapiv3::ReferenceOr::Reference { .. } => continue,
+            openapiv3::ReferenceOr::Reference { reference } => {
+                // Extract param name from "#/components/parameters/foo"
+                let param_name = match reference.strip_prefix("#/components/parameters/") {
+                    Some(name) => name,
+                    None => continue,
+                };
+                // Look up in components
+                match api.components.as_ref()
+                    .and_then(|c| c.parameters.get(param_name))
+                    .and_then(|p| match p {
+                        openapiv3::ReferenceOr::Item(p) => Some(p),
+                        _ => None,
+                    })
+                {
+                    Some(p) => p,
+                    None => continue,
+                }
+            }
         };
 
         let data = match param {
@@ -682,7 +899,55 @@ fn extract_request_body(
             options,
             schema_ref: None,
             example,
+            array_item_type: None,
         });
+    }
+
+    // Handle array request bodies: type: array with items.$ref
+    if let openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) = &schema.schema_kind {
+        if let Some(ref items_ref) = arr.items {
+            let (item_schema, item_name): (Option<&openapiv3::Schema>, Option<String>) = match items_ref {
+                openapiv3::ReferenceOr::Reference { reference } => {
+                    let sname = spec::schema_name_from_ref(reference);
+                    let resolved = sname.and_then(|n| {
+                        api.components.as_ref()
+                            .and_then(|c| c.schemas.get(n))
+                            .and_then(|s| match s {
+                                openapiv3::ReferenceOr::Item(schema) => Some(schema as &openapiv3::Schema),
+                                _ => None,
+                            })
+                    });
+                    (resolved, sname.map(|s| s.to_string()))
+                }
+                openapiv3::ReferenceOr::Item(boxed) => (Some(boxed as &openapiv3::Schema), None),
+            };
+
+            if let Some(item_schema) = item_schema {
+                let required: Vec<String> =
+                    if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) = &item_schema.schema_kind {
+                        obj.required.clone()
+                    } else {
+                        vec![]
+                    };
+
+                let mut fields = build_fields(api, item_schema, &required);
+
+                if expand {
+                    use crate::commands::schemas::expand_fields_pub;
+                    let mut visited = std::collections::HashSet::new();
+                    fields = expand_fields_pub(api, fields, &mut visited, 1, 5);
+                }
+
+                return Some(RequestBody {
+                    content_type: content_type.to_string(),
+                    fields,
+                    options: Vec::new(),
+                    schema_ref: item_name.clone(),
+                    example,
+                    array_item_type: item_name,
+                });
+            }
+        }
     }
 
     let required: Vec<String> =
@@ -706,6 +971,7 @@ fn extract_request_body(
         options: Vec::new(),
         schema_ref: top_ref_name,
         example,
+        array_item_type: None,
     })
 }
 
@@ -714,6 +980,7 @@ pub fn get_endpoint_detail(
     method: &str,
     path: &str,
     expand: bool,
+    bin_name: &str,
 ) -> Option<Endpoint> {
     // 1. Find path item
     let path_item = resolve_path_item(api, path)?;
@@ -728,7 +995,7 @@ pub fn get_endpoint_detail(
     let request_body = extract_request_body(api, operation, expand);
 
     // 5. Responses
-    let responses = extract_responses(api, operation);
+    let responses = extract_responses(api, operation, bin_name);
 
     // 6. Security schemes
     let security_schemes = extract_security(api, operation);
@@ -740,12 +1007,13 @@ pub fn get_endpoint_detail(
     let mut seen = std::collections::HashSet::new();
     let mut drill_deeper = Vec::new();
 
-    // 2xx response schema refs only
+    // 2xx response schema refs only (strip [] suffix for array types)
     for resp in &responses {
         if resp.status_code.starts_with('2') {
             if let Some(ref name) = resp.schema_ref {
-                if seen.insert(name.clone()) {
-                    drill_deeper.push(format!("phyllotaxis schemas {}", name));
+                let bare_name = name.strip_suffix("[]").unwrap_or(name);
+                if seen.insert(bare_name.to_string()) {
+                    drill_deeper.push(format!("{} schemas {}", bin_name, bare_name));
                 }
             }
         }
@@ -756,12 +1024,12 @@ pub fn get_endpoint_detail(
         if !body.options.is_empty() {
             for name in &body.options {
                 if seen.insert(name.clone()) {
-                    drill_deeper.push(format!("phyllotaxis schemas {}", name));
+                    drill_deeper.push(format!("{} schemas {}", bin_name, name));
                 }
             }
         } else if let Some(ref name) = body.schema_ref {
             if seen.insert(name.clone()) {
-                drill_deeper.push(format!("phyllotaxis schemas {}", name));
+                drill_deeper.push(format!("{} schemas {}", bin_name, name));
             }
         }
     }
@@ -901,7 +1169,7 @@ mod tests {
     #[test]
     fn test_get_endpoint_detail_post_pets() {
         let api = load_petstore();
-        let endpoint = get_endpoint_detail(&api, "POST", "/pets", false);
+        let endpoint = get_endpoint_detail(&api, "POST", "/pets", false, "phyllotaxis");
         assert!(endpoint.is_some(), "Expected POST /pets endpoint");
         let ep = endpoint.unwrap();
 
@@ -928,7 +1196,7 @@ mod tests {
     #[test]
     fn test_get_endpoint_detail_not_found() {
         let api = load_petstore();
-        let result = get_endpoint_detail(&api, "DELETE", "/nonexistent", false);
+        let result = get_endpoint_detail(&api, "DELETE", "/nonexistent", false, "phyllotaxis");
         assert!(result.is_none());
     }
 
@@ -1098,7 +1366,7 @@ mod tests {
     #[test]
     fn test_oneof_request_body_surfaces_options() {
         let api = load_petstore();
-        let ep = get_endpoint_detail(&api, "POST", "/animals", false)
+        let ep = get_endpoint_detail(&api, "POST", "/animals", false, "phyllotaxis")
             .expect("Expected POST /animals endpoint");
         let body = ep.request_body.expect("Expected request body");
         assert!(body.fields.is_empty(), "OneOf body should have no fields");
@@ -1110,7 +1378,7 @@ mod tests {
     #[test]
     fn test_expand_endpoint_request_body() {
         let api = load_petstore();
-        let ep = get_endpoint_detail(&api, "POST", "/pets", true)
+        let ep = get_endpoint_detail(&api, "POST", "/pets", true, "phyllotaxis")
             .expect("Expected POST /pets endpoint");
         let body = ep.request_body.expect("Expected request body");
         // With expand, the owner field should have nested fields inlined
@@ -1215,7 +1483,7 @@ mod tests {
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
         let operation = resolve_operation(path_item, "GET").unwrap();
-        let responses = extract_responses(&api.api, operation);
+        let responses = extract_responses(&api.api, operation, "phyllotaxis");
         assert!(!responses.is_empty(), "GET /pets should have at least one response");
     }
 
@@ -1228,7 +1496,7 @@ mod tests {
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
         let operation = resolve_operation(path_item, "GET").unwrap();
-        let responses = extract_responses(&api.api, operation);
+        let responses = extract_responses(&api.api, operation, "phyllotaxis");
         for r in &responses {
             assert!(!r.status_code.is_empty());
         }
@@ -1291,7 +1559,7 @@ mod tests {
     #[test]
     fn test_drill_deeper_2xx_response_schema() {
         let api = load_petstore();
-        let ep = get_endpoint_detail(&api, "GET", "/pets/{id}", false).unwrap();
+        let ep = get_endpoint_detail(&api, "GET", "/pets/{id}", false, "phyllotaxis").unwrap();
         assert!(
             ep.drill_deeper.contains(&"phyllotaxis schemas Pet".to_string()),
             "GET /pets/{{petId}} 200 response should yield drill_deeper for Pet, got: {:?}",
@@ -1302,7 +1570,7 @@ mod tests {
     #[test]
     fn test_drill_deeper_excludes_error_responses() {
         let api = load_petstore();
-        let ep = get_endpoint_detail(&api, "POST", "/pets", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", false, "phyllotaxis").unwrap();
         // POST /pets has 201 → Pet, 400 → no schema, 409 → no schema
         assert!(
             ep.drill_deeper.contains(&"phyllotaxis schemas Pet".to_string()),
@@ -1319,7 +1587,7 @@ mod tests {
     #[test]
     fn test_drill_deeper_empty_when_no_schemas() {
         let api = load_petstore();
-        let ep = get_endpoint_detail(&api, "DELETE", "/pets/{id}", false).unwrap();
+        let ep = get_endpoint_detail(&api, "DELETE", "/pets/{id}", false, "phyllotaxis").unwrap();
         assert!(
             ep.drill_deeper.is_empty(),
             "DELETE /pets/{{petId}} (204 no content) should have empty drill_deeper, got: {:?}",
@@ -1331,7 +1599,7 @@ mod tests {
     fn test_drill_deeper_deduplication() {
         // POST /pets: 201 response has Pet schema_ref, request body also refs Pet
         let api = load_petstore();
-        let ep = get_endpoint_detail(&api, "POST", "/pets", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", false, "phyllotaxis").unwrap();
         let pet_count = ep.drill_deeper.iter().filter(|d| d.contains("Pet")).count();
         assert_eq!(
             pet_count, 1,
@@ -1343,7 +1611,7 @@ mod tests {
     #[test]
     fn test_request_body_schema_ref_concrete() {
         let api = load_petstore();
-        let ep = get_endpoint_detail(&api, "POST", "/pets", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", false, "phyllotaxis").unwrap();
         let body = ep.request_body.as_ref().unwrap();
         assert_eq!(
             body.schema_ref,
@@ -1415,7 +1683,7 @@ mod tests {
     #[test]
     fn test_links_extracted_from_post_users() {
         let api = load_kitchen_sink();
-        let ep = get_endpoint_detail(&api, "POST", "/users", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/users", false, "phyllotaxis").unwrap();
         let link_names: Vec<&str> = ep.links.iter().map(|l| l.name.as_str()).collect();
         assert!(link_names.contains(&"GetCreatedUser"), "missing GetCreatedUser: {:?}", link_names);
         assert!(link_names.contains(&"ListUserPets"), "missing ListUserPets: {:?}", link_names);
@@ -1427,7 +1695,7 @@ mod tests {
     #[test]
     fn test_link_drill_command_built() {
         let api = load_kitchen_sink();
-        let ep = get_endpoint_detail(&api, "POST", "/users", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/users", false, "phyllotaxis").unwrap();
         let link = ep.links.iter().find(|l| l.name == "GetCreatedUser").unwrap();
         assert!(
             link.drill_command.as_ref().map(|c| c.contains("phyllotaxis resources")).unwrap_or(false),
@@ -1438,7 +1706,7 @@ mod tests {
     #[test]
     fn test_response_headers_extracted() {
         let api = load_kitchen_sink();
-        let ep = get_endpoint_detail(&api, "GET", "/users", false).unwrap();
+        let ep = get_endpoint_detail(&api, "GET", "/users", false, "phyllotaxis").unwrap();
         let ok_resp = ep.responses.iter().find(|r| r.status_code == "200").unwrap();
         let header_names: Vec<&str> = ok_resp.headers.iter().map(|h| h.name.as_str()).collect();
         assert!(
@@ -1454,7 +1722,7 @@ mod tests {
     #[test]
     fn test_callbacks_extracted_inline() {
         let api = load_kitchen_sink();
-        let ep = get_endpoint_detail(&api, "POST", "/notifications/subscribe", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/notifications/subscribe", false, "phyllotaxis").unwrap();
         let cb_names: Vec<&str> = ep.callbacks.iter().map(|c| c.name.as_str()).collect();
         assert!(cb_names.contains(&"onEvent"), "missing onEvent: {:?}", cb_names);
         assert!(cb_names.contains(&"onStatusChange"), "missing onStatusChange: {:?}", cb_names);
@@ -1471,7 +1739,7 @@ mod tests {
     #[test]
     fn test_callback_responses_extracted() {
         let api = load_kitchen_sink();
-        let ep = get_endpoint_detail(&api, "POST", "/notifications/subscribe", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/notifications/subscribe", false, "phyllotaxis").unwrap();
         let on_event = ep.callbacks.iter().find(|c| c.name == "onEvent").unwrap();
         let op = &on_event.operations[0];
         let status_codes: Vec<&str> = op.responses.iter().map(|r| r.status_code.as_str()).collect();
@@ -1484,7 +1752,7 @@ mod tests {
     #[test]
     fn test_multipart_request_body_extracted() {
         let api = load_kitchen_sink();
-        let ep = get_endpoint_detail(&api, "POST", "/files/upload", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/files/upload", false, "phyllotaxis").unwrap();
         let rb = ep.request_body.as_ref().expect("should have request body");
         assert_eq!(rb.content_type, "multipart/form-data");
         let field_names: Vec<&str> = rb.fields.iter().map(|f| f.name.as_str()).collect();
@@ -1495,7 +1763,7 @@ mod tests {
     #[test]
     fn test_multipart_binary_field_type() {
         let api = load_kitchen_sink();
-        let ep = get_endpoint_detail(&api, "POST", "/files/upload", false).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/files/upload", false, "phyllotaxis").unwrap();
         let rb = ep.request_body.as_ref().unwrap();
         let file_field = rb.fields.iter().find(|f| f.name == "file").unwrap();
         assert_eq!(
@@ -1507,7 +1775,7 @@ mod tests {
     #[test]
     fn test_form_urlencoded_request_body() {
         let api = load_kitchen_sink();
-        let ep = get_endpoint_detail(&api, "PUT", "/files/{fileId}/metadata", false).unwrap();
+        let ep = get_endpoint_detail(&api, "PUT", "/files/{fileId}/metadata", false, "phyllotaxis").unwrap();
         let rb = ep.request_body.as_ref().expect("should have request body");
         assert_eq!(rb.content_type, "application/x-www-form-urlencoded");
         let field_names: Vec<&str> = rb.fields.iter().map(|f| f.name.as_str()).collect();

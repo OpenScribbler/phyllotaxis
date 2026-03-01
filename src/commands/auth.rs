@@ -11,6 +11,27 @@ pub struct SecuritySchemeInfo {
     pub detail: String,
     pub description: Option<String>,
     pub usage_count: usize,
+    /// Non-empty only for OAuth2 schemes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub oauth2_flows: Vec<OAuth2FlowInfo>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct OAuth2FlowInfo {
+    pub flow_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_url: Option<String>,
+    pub scopes: Vec<OAuth2ScopeInfo>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct OAuth2ScopeInfo {
+    pub name: String,
+    pub description: String,
 }
 
 pub fn build_auth_model(api: &openapiv3::OpenAPI) -> AuthModel {
@@ -28,10 +49,10 @@ pub fn build_auth_model(api: &openapiv3::OpenAPI) -> AuthModel {
                 _ => return None,
             };
 
-            let (scheme_type, detail, description) = match scheme {
+            let (scheme_type, detail, description, oauth2_flows) = match scheme {
                 openapiv3::SecurityScheme::HTTP {
                     scheme, description, ..
-                } => ("http".to_string(), scheme.clone(), description.clone()),
+                } => ("http".to_string(), scheme.clone(), description.clone(), vec![]),
                 openapiv3::SecurityScheme::APIKey {
                     location,
                     name,
@@ -47,15 +68,23 @@ pub fn build_auth_model(api: &openapiv3::OpenAPI) -> AuthModel {
                         "apiKey".to_string(),
                         format!("{} ({})", name, loc),
                         description.clone(),
+                        vec![],
                     )
                 }
-                openapiv3::SecurityScheme::OAuth2 { description, .. } => {
-                    ("oauth2".to_string(), "oauth2".to_string(), description.clone())
+                openapiv3::SecurityScheme::OAuth2 { flows, description, .. } => {
+                    let oauth2_flows = extract_oauth2_flows(flows);
+                    let detail = oauth2_flows
+                        .iter()
+                        .map(|f| f.flow_type.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    ("oauth2".to_string(), detail, description.clone(), oauth2_flows)
                 }
                 openapiv3::SecurityScheme::OpenIDConnect { description, .. } => (
                     "openIdConnect".to_string(),
                     "openIdConnect".to_string(),
                     description.clone(),
+                    vec![],
                 ),
             };
 
@@ -67,6 +96,7 @@ pub fn build_auth_model(api: &openapiv3::OpenAPI) -> AuthModel {
                 detail,
                 description,
                 usage_count,
+                oauth2_flows,
             })
         })
         .collect();
@@ -75,6 +105,58 @@ pub fn build_auth_model(api: &openapiv3::OpenAPI) -> AuthModel {
         schemes,
         total_operations,
     }
+}
+
+fn scopes_from_map(map: &indexmap::IndexMap<String, String>) -> Vec<OAuth2ScopeInfo> {
+    map.iter()
+        .map(|(name, desc)| OAuth2ScopeInfo {
+            name: name.clone(),
+            description: desc.clone(),
+        })
+        .collect()
+}
+
+fn extract_oauth2_flows(flows: &openapiv3::OAuth2Flows) -> Vec<OAuth2FlowInfo> {
+    let mut result = Vec::new();
+
+    if let Some(ref f) = flows.implicit {
+        result.push(OAuth2FlowInfo {
+            flow_type: "implicit".to_string(),
+            authorization_url: Some(f.authorization_url.clone()),
+            token_url: None,
+            refresh_url: f.refresh_url.clone(),
+            scopes: scopes_from_map(&f.scopes),
+        });
+    }
+    if let Some(ref f) = flows.authorization_code {
+        result.push(OAuth2FlowInfo {
+            flow_type: "authorizationCode".to_string(),
+            authorization_url: Some(f.authorization_url.clone()),
+            token_url: Some(f.token_url.clone()),
+            refresh_url: f.refresh_url.clone(),
+            scopes: scopes_from_map(&f.scopes),
+        });
+    }
+    if let Some(ref f) = flows.client_credentials {
+        result.push(OAuth2FlowInfo {
+            flow_type: "clientCredentials".to_string(),
+            authorization_url: None,
+            token_url: Some(f.token_url.clone()),
+            refresh_url: f.refresh_url.clone(),
+            scopes: scopes_from_map(&f.scopes),
+        });
+    }
+    if let Some(ref f) = flows.password {
+        result.push(OAuth2FlowInfo {
+            flow_type: "password".to_string(),
+            authorization_url: None,
+            token_url: Some(f.token_url.clone()),
+            refresh_url: f.refresh_url.clone(),
+            scopes: scopes_from_map(&f.scopes),
+        });
+    }
+
+    result
 }
 
 fn count_operations(api: &openapiv3::OpenAPI) -> usize {
@@ -147,6 +229,7 @@ mod tests {
         assert_eq!(scheme.name, "bearerAuth");
         assert_eq!(scheme.scheme_type, "http");
         assert_eq!(scheme.detail, "bearer");
+        assert!(scheme.oauth2_flows.is_empty(), "HTTP scheme should have no OAuth2 flows");
         assert!(scheme.usage_count > 0, "bearerAuth should be used by operations");
         assert_eq!(
             scheme.usage_count, model.total_operations,

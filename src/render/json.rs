@@ -90,7 +90,7 @@ fn serialize<T: serde::Serialize>(value: &T, is_tty: bool) -> String {
     }
 }
 
-pub fn render_overview(data: &OverviewData, is_tty: bool) -> String {
+pub fn render_overview(data: &OverviewData, bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct OverviewJson<'a> {
         title: &'a str,
@@ -98,6 +98,8 @@ pub fn render_overview(data: &OverviewData, is_tty: bool) -> String {
         servers: Vec<ServerJson<'a>>,
         auth: &'a [String],
         resource_count: usize,
+        endpoint_count: usize,
+        path_count: usize,
         schema_count: usize,
         callback_count: usize,
         commands: CommandsJson,
@@ -111,10 +113,10 @@ pub fn render_overview(data: &OverviewData, is_tty: bool) -> String {
 
     #[derive(serde::Serialize)]
     struct CommandsJson {
-        resources: &'static str,
-        schemas: &'static str,
-        auth: &'static str,
-        search: &'static str,
+        resources: String,
+        schemas: String,
+        auth: String,
+        search: String,
     }
 
     // Group server variables by URL (for now, all variables go with the first server)
@@ -141,24 +143,26 @@ pub fn render_overview(data: &OverviewData, is_tty: bool) -> String {
         servers,
         auth: &data.auth_schemes,
         resource_count: data.resource_count,
+        endpoint_count: data.endpoint_count,
+        path_count: data.path_count,
         schema_count: data.schema_count,
         callback_count: data.callback_count,
         commands: CommandsJson {
-            resources: "phyllotaxis resources",
-            schemas: "phyllotaxis schemas",
-            auth: "phyllotaxis auth",
-            search: "phyllotaxis search",
+            resources: format!("{} resources", bin_name),
+            schemas: format!("{} schemas", bin_name),
+            auth: format!("{} auth", bin_name),
+            search: format!("{} search", bin_name),
         },
     };
 
     serialize(&json, is_tty)
 }
 
-pub fn render_resource_list(groups: &[ResourceGroup], is_tty: bool) -> String {
+pub fn render_resource_list(groups: &[ResourceGroup], bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct ResourceListJson {
         resources: Vec<ResourceItemJson>,
-        drill_deeper: &'static str,
+        drill_deeper: String,
     }
 
     #[derive(serde::Serialize)]
@@ -185,13 +189,13 @@ pub fn render_resource_list(groups: &[ResourceGroup], is_tty: bool) -> String {
 
     let json = ResourceListJson {
         resources,
-        drill_deeper: "phyllotaxis resources <name>",
+        drill_deeper: format!("{} resources <name>", bin_name),
     };
 
     serialize(&json, is_tty)
 }
 
-pub fn render_resource_detail(group: &ResourceGroup, is_tty: bool) -> String {
+pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct ResourceDetailJson<'a> {
         slug: &'a str,
@@ -229,8 +233,8 @@ pub fn render_resource_detail(group: &ResourceGroup, is_tty: bool) -> String {
         .iter()
         .map(|e| {
             format!(
-                "phyllotaxis resources {} {} {}",
-                group.slug, e.method, e.path
+                "{} resources {} {} {}",
+                bin_name, group.slug, e.method, e.path
             )
         })
         .collect();
@@ -248,24 +252,24 @@ pub fn render_resource_detail(group: &ResourceGroup, is_tty: bool) -> String {
     serialize(&json, is_tty)
 }
 
-pub fn render_schema_list(names: &[String], is_tty: bool) -> String {
+pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct SchemaListJson<'a> {
         schemas: &'a [String],
         total: usize,
-        drill_deeper: &'static str,
+        drill_deeper: String,
     }
 
     let json = SchemaListJson {
         total: names.len(),
         schemas: names,
-        drill_deeper: "phyllotaxis schemas <name>",
+        drill_deeper: format!("{} schemas <name>", bin_name),
     };
 
     serialize(&json, is_tty)
 }
 
-pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, is_tty: bool) -> String {
+pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, bin_name: &str, is_tty: bool) -> String {
     use crate::models::schema::Composition;
 
     let composition = model.composition.as_ref().map(|c| match c {
@@ -307,7 +311,7 @@ pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, is_tty: 
             .iter()
             .filter_map(|f| f.nested_schema_name.as_ref())
             .filter(|name| seen.insert(name.to_string()))
-            .map(|name| format!("phyllotaxis schemas {}", name))
+            .map(|name| format!("{} schemas {}", bin_name, name))
             .collect()
     };
 
@@ -329,12 +333,12 @@ pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, is_tty: 
     serialize(&json, is_tty)
 }
 
-pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry], is_tty: bool) -> String {
+pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry], bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct CallbackListJson<'a> {
         total: usize,
         callbacks: Vec<CallbackSummaryJson<'a>>,
-        drill_deeper: &'static str,
+        drill_deeper: String,
     }
     #[derive(serde::Serialize)]
     struct CallbackSummaryJson<'a> {
@@ -352,20 +356,20 @@ pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry]
     let json = CallbackListJson {
         total: items.len(),
         callbacks: items,
-        drill_deeper: "phyllotaxis callbacks <name>",
+        drill_deeper: format!("{} callbacks <name>", bin_name),
     };
     serialize(&json, is_tty)
 }
 
-pub fn render_callback_detail(cb: &crate::models::resource::CallbackEntry, is_tty: bool) -> String {
+pub fn render_callback_detail(cb: &crate::models::resource::CallbackEntry, _bin_name: &str, is_tty: bool) -> String {
     serialize(cb, is_tty)
 }
 
-pub fn render_search(results: &crate::commands::search::SearchResults, is_tty: bool) -> String {
+pub fn render_search(results: &crate::commands::search::SearchResults, _bin_name: &str, is_tty: bool) -> String {
     serialize(results, is_tty)
 }
 
-pub fn render_auth(model: &crate::commands::auth::AuthModel, is_tty: bool) -> String {
+pub fn render_auth(model: &crate::commands::auth::AuthModel, _bin_name: &str, is_tty: bool) -> String {
     serialize(model, is_tty)
 }
 
@@ -400,15 +404,17 @@ mod tests {
             server_variables: vec![],
             auth_schemes: vec![],
             resource_count: 0,
+            endpoint_count: 0,
+            path_count: 0,
             schema_count: 0,
             callback_count: 0,
         };
-        let v = parse_json(&render_overview(&overview, false));
+        let v = parse_json(&render_overview(&overview, "phyllotaxis", false));
         assert_eq!(v["title"], "Test API");
         assert!(v["description"].is_null());
 
         // Resource list
-        parse_json(&render_resource_list(&[], false));
+        parse_json(&render_resource_list(&[], "phyllotaxis", false));
 
         // Resource detail
         let group = ResourceGroup {
@@ -419,11 +425,11 @@ mod tests {
             is_alpha: false,
             endpoints: vec![],
         };
-        let v = parse_json(&render_resource_detail(&group, false));
+        let v = parse_json(&render_resource_detail(&group, "phyllotaxis", false));
         assert_eq!(v["deprecated"], false);
 
         // Schema list
-        parse_json(&render_schema_list(&["Pet".to_string()], false));
+        parse_json(&render_schema_list(&["Pet".to_string()], "phyllotaxis", false));
 
         // Schema detail
         let model = SchemaModel {
@@ -436,7 +442,7 @@ mod tests {
             external_docs: None,
             base_type: None,
         };
-        let v = parse_json(&render_schema_detail(&model, false));
+        let v = parse_json(&render_schema_detail(&model, "phyllotaxis", false));
         assert!(v["composition"].is_null());
         assert!(v["discriminator"].is_null());
         assert!(v["drill_deeper"].is_array());
@@ -449,10 +455,11 @@ mod tests {
                 detail: "bearer".to_string(),
                 description: None,
                 usage_count: 3,
+                oauth2_flows: vec![],
             }],
             total_operations: 3,
         };
-        let v = parse_json(&render_auth(&auth, false));
+        let v = parse_json(&render_auth(&auth, "phyllotaxis", false));
         assert!(v["schemes"].is_array());
 
         // Search
@@ -463,7 +470,7 @@ mod tests {
             schemas: vec![],
             callbacks: vec![],
         };
-        let v = parse_json(&render_search(&results, false));
+        let v = parse_json(&render_search(&results, "phyllotaxis", false));
         assert_eq!(v["term"], "test");
         assert!(v["resources"].is_array());
 
@@ -500,7 +507,7 @@ mod tests {
             external_docs: None,
             base_type: None,
         };
-        let v = parse_json(&render_schema_detail(&model_with_title, false));
+        let v = parse_json(&render_schema_detail(&model_with_title, "phyllotaxis", false));
         assert_eq!(v["title"], "Geographic Location", "JSON should include title");
 
         // Field with new properties (Task 20)
@@ -536,6 +543,7 @@ mod tests {
                 options: vec![],
                 schema_ref: None,
                 example: None,
+                array_item_type: None,
             }),
             responses: vec![],
             security_schemes: vec![],
@@ -561,8 +569,8 @@ mod tests {
             endpoints: vec![],
         };
 
-        let pretty = render_resource_detail(&group, true);
-        let compact = render_resource_detail(&group, false);
+        let pretty = render_resource_detail(&group, "phyllotaxis", true);
+        let compact = render_resource_detail(&group, "phyllotaxis", false);
 
         // Pretty has newlines; compact is a single line
         assert!(pretty.contains('\n'), "TTY output should be pretty-printed");
