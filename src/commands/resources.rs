@@ -595,7 +595,7 @@ fn build_link_drill_command(
     None
 }
 
-fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation, bin_name: &str) -> Vec<crate::models::resource::Response> {
+fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation, expand: bool, bin_name: &str) -> Vec<crate::models::resource::Response> {
     use crate::models::resource::{Response, ResponseHeader};
     let mut responses = Vec::new();
     for (status, resp_ref) in &operation.responses.responses {
@@ -670,6 +670,12 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation,
 
         let links = extract_links_from_response(api, resp, bin_name);
 
+        let fields = if expand {
+            expand_response_schema(api, &schema_ref_name)
+        } else {
+            Vec::new()
+        };
+
         responses.push(Response {
             status_code,
             description: resp.description.clone(),
@@ -677,6 +683,7 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation,
             example,
             headers,
             links,
+            fields,
         });
     }
 
@@ -744,6 +751,12 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation,
 
             let links = extract_links_from_response(api, resp, bin_name);
 
+            let fields = if expand {
+                expand_response_schema(api, &schema_ref_name)
+            } else {
+                Vec::new()
+            };
+
             responses.push(Response {
                 status_code: "default".to_string(),
                 description: resp.description.clone(),
@@ -751,11 +764,41 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation,
                 example,
                 headers,
                 links,
+                fields,
             });
         }
     }
 
     responses
+}
+
+/// Resolve a response's schema_ref into expanded fields using the same
+/// build_fields + expand_fields_pub infrastructure used for request bodies.
+fn expand_response_schema(
+    api: &openapiv3::OpenAPI,
+    schema_ref: &Option<String>,
+) -> Vec<crate::models::resource::Field> {
+    use crate::commands::schemas::{find_schema, expand_fields_pub};
+
+    let name = match schema_ref {
+        Some(n) => n.strip_suffix("[]").unwrap_or(n),
+        None => return Vec::new(),
+    };
+
+    let (_key, schema) = match find_schema(api, name) {
+        Some(pair) => pair,
+        None => return Vec::new(),
+    };
+
+    let required = match &schema.schema_kind {
+        openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => obj.required.clone(),
+        _ => vec![],
+    };
+
+    let fields = build_fields(api, schema, &required);
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(name.to_string());
+    expand_fields_pub(api, fields, &mut visited, 1, 5)
 }
 
 fn merge_parameters(
@@ -842,7 +885,14 @@ fn extract_request_body(
     let rb_ref = operation.request_body.as_ref()?;
     let rb = match rb_ref {
         openapiv3::ReferenceOr::Item(rb) => rb,
-        openapiv3::ReferenceOr::Reference { .. } => return None,
+        openapiv3::ReferenceOr::Reference { reference } => {
+            let name = reference.strip_prefix("#/components/requestBodies/")?;
+            let components = api.components.as_ref()?;
+            match components.request_bodies.get(name)? {
+                openapiv3::ReferenceOr::Item(rb) => rb,
+                openapiv3::ReferenceOr::Reference { .. } => return None,
+            }
+        }
     };
 
     // Priority order: JSON first (existing behavior), then multipart, then form-encoded, then any
@@ -995,7 +1045,7 @@ pub fn get_endpoint_detail(
     let request_body = extract_request_body(api, operation, expand);
 
     // 5. Responses
-    let responses = extract_responses(api, operation, bin_name);
+    let responses = extract_responses(api, operation, expand, bin_name);
 
     // 6. Security schemes
     let security_schemes = extract_security(api, operation);
@@ -1163,7 +1213,7 @@ mod tests {
 
         // Pets group should have 5 endpoints (4 original + /animals POST)
         let pets = groups.iter().find(|g| g.slug == "pets").unwrap();
-        assert_eq!(pets.endpoints.len(), 5, "Expected 5 endpoints in pets group");
+        assert_eq!(pets.endpoints.len(), 6, "Expected 6 endpoints in pets group");
     }
 
     #[test]
@@ -1391,6 +1441,64 @@ mod tests {
     }
 
     #[test]
+    fn test_ref_request_body_resolves() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "PUT", "/pets/{id}", false, "phyllotaxis")
+            .expect("Expected PUT /pets/{id} endpoint");
+        let body = ep
+            .request_body
+            .expect("$ref request body should resolve, not be None");
+        assert_eq!(body.content_type, "application/json");
+        assert!(
+            !body.fields.is_empty(),
+            "$ref request body should have fields from the Pet schema"
+        );
+        let field_names: Vec<&str> = body.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            field_names.contains(&"name"),
+            "Expected 'name' field from Pet schema, got: {:?}",
+            field_names
+        );
+    }
+
+    #[test]
+    fn test_expand_endpoint_response_fields() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", true, "phyllotaxis")
+            .expect("Expected POST /pets endpoint");
+        // POST /pets returns 201 -> Pet; with expand, response should have Pet's fields
+        let resp_201 = ep.responses.iter().find(|r| r.status_code == "201")
+            .expect("Expected 201 response");
+        assert_eq!(resp_201.schema_ref.as_deref(), Some("Pet"));
+        assert!(
+            !resp_201.fields.is_empty(),
+            "With expand, 201 response should have inline fields from Pet schema"
+        );
+        // Check that the id field is present (Pet has required id and name)
+        let id_field = resp_201.fields.iter().find(|f| f.name == "id");
+        assert!(id_field.is_some(), "Pet schema should have an id field");
+
+        // Error responses should not have fields (no schema_ref)
+        let resp_400 = ep.responses.iter().find(|r| r.status_code == "400")
+            .expect("Expected 400 response");
+        assert!(resp_400.fields.is_empty(), "Error response without schema should have no fields");
+    }
+
+    #[test]
+    fn test_expand_false_response_fields_empty() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "POST", "/pets", false, "phyllotaxis")
+            .expect("Expected POST /pets endpoint");
+        // Without expand, response fields should be empty
+        let resp_201 = ep.responses.iter().find(|r| r.status_code == "201")
+            .expect("Expected 201 response");
+        assert!(
+            resp_201.fields.is_empty(),
+            "Without expand, response fields should be empty"
+        );
+    }
+
+    #[test]
     fn test_pascal_case_display_name() {
         let api = load_petstore();
         let groups = extract_resource_groups(&api);
@@ -1483,7 +1591,7 @@ mod tests {
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
         let operation = resolve_operation(path_item, "GET").unwrap();
-        let responses = extract_responses(&api.api, operation, "phyllotaxis");
+        let responses = extract_responses(&api.api, operation, false, "phyllotaxis");
         assert!(!responses.is_empty(), "GET /pets should have at least one response");
     }
 
@@ -1496,7 +1604,7 @@ mod tests {
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
         let operation = resolve_operation(path_item, "GET").unwrap();
-        let responses = extract_responses(&api.api, operation, "phyllotaxis");
+        let responses = extract_responses(&api.api, operation, false, "phyllotaxis");
         for r in &responses {
             assert!(!r.status_code.is_empty());
         }

@@ -15,6 +15,7 @@ pub struct SearchResults {
     pub endpoints: Vec<EndpointMatch>,
     pub schemas: Vec<SchemaMatch>,
     pub callbacks: Vec<CallbackMatch>,
+    pub suggestions: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -212,12 +213,31 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
         })
         .collect();
 
+    let has_results = !resources.is_empty()
+        || !endpoints.is_empty()
+        || !schemas.is_empty()
+        || !callbacks.is_empty();
+
+    let suggestions = if has_results {
+        Vec::new()
+    } else {
+        let mut suggs: Vec<String> = crate::commands::resources::suggest_similar(&groups, term)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        suggs.extend(crate::commands::schemas::suggest_similar_schemas(api, term));
+        suggs.dedup();
+        suggs.truncate(5);
+        suggs
+    };
+
     SearchResults {
         term: term.to_string(),
         resources,
         endpoints,
         schemas,
         callbacks,
+        suggestions,
     }
 }
 
@@ -395,6 +415,34 @@ mod tests {
         assert!(
             user_match.unwrap().matched_field.is_none(),
             "Name-matched schema should not have matched_field set"
+        );
+    }
+
+    #[test]
+    fn test_search_misspelled_term_has_suggestions() {
+        let api = load_petstore_api();
+        // "ptes" is a typo for "pets" — should produce fuzzy suggestions
+        let results = search(&api, "ptes");
+        assert!(results.resources.is_empty(), "No exact matches expected");
+        assert!(results.endpoints.is_empty(), "No exact matches expected");
+        assert!(results.schemas.is_empty(), "No exact matches expected");
+        assert!(
+            !results.suggestions.is_empty(),
+            "Expected fuzzy suggestions for misspelled 'ptes', got none"
+        );
+    }
+
+    #[test]
+    fn test_search_successful_has_empty_suggestions() {
+        let api = load_petstore_api();
+        let results = search(&api, "pet");
+        assert!(
+            !results.resources.is_empty() || !results.endpoints.is_empty(),
+            "Expected actual results for 'pet'"
+        );
+        assert!(
+            results.suggestions.is_empty(),
+            "Suggestions should be empty when there are real results"
         );
     }
 }

@@ -469,10 +469,12 @@ mod tests {
             endpoints: vec![],
             schemas: vec![],
             callbacks: vec![],
+            suggestions: vec![],
         };
         let v = parse_json(&render_search(&results, "phyllotaxis", false));
         assert_eq!(v["term"], "test");
         assert!(v["resources"].is_array());
+        assert!(v["suggestions"].is_array());
 
         // Endpoint detail
         let endpoint = Endpoint {
@@ -637,6 +639,7 @@ mod tests {
                     description: None,
                 }],
                 links: vec![],
+                fields: vec![],
             }],
             security_schemes: vec![],
             callbacks: vec![],

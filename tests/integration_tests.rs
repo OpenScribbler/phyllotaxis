@@ -260,6 +260,44 @@ fn test_endpoint_not_found() {
     );
 }
 
+#[test]
+fn test_method_without_path_errors() {
+    let (_stdout, stderr, code) = run_with_petstore(&["resources", "pets", "GET"]);
+    assert_eq!(code, 1, "Expected exit code 1 when method provided without path");
+    assert!(
+        stderr.contains("Missing endpoint path"),
+        "Expected 'Missing endpoint path' in stderr. Got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("GET"),
+        "Expected method echoed in usage hint. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_method_without_path_json_errors() {
+    let (_stdout, stderr, code) = run_with_petstore(&["--json", "resources", "pets", "POST"]);
+    assert_eq!(code, 1, "Expected exit code 1 when method provided without path in JSON mode");
+    let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|_| {
+        panic!(
+            "Expected stderr to be valid JSON. Got: {:?}",
+            &stderr[..200.min(stderr.len())]
+        )
+    });
+    assert!(
+        parsed.get("error").is_some(),
+        "Expected JSON stderr to have an 'error' key. Got: {}",
+        parsed
+    );
+    assert!(
+        stderr.contains("Missing endpoint path"),
+        "Expected 'Missing endpoint path' in JSON error. Got: {}",
+        stderr
+    );
+}
+
 // ─── Task 3.1: ANSI escape injection sanitization ───
 
 #[test]
