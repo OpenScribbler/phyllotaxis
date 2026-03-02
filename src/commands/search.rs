@@ -1,4 +1,4 @@
-use crate::commands::resources::{extract_resource_groups, path_prefix_group_name};
+use crate::commands::resources::{extract_object_properties, extract_resource_groups, path_prefix_group_name};
 use crate::commands::schemas::list_schemas;
 use crate::models::resource::slugify;
 
@@ -164,30 +164,26 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
 
         // Field name match: look inside the schema's properties
         if let Some((_, schema)) = crate::commands::schemas::find_schema(api, &name) {
-            let field_match = match &schema.schema_kind {
-                openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => obj
-                    .properties
+            let field_match = if let Some((props, _)) = extract_object_properties(schema) {
+                props
                     .keys()
                     .find(|k| k.to_lowercase().contains(&term_lower))
-                    .cloned(),
-                openapiv3::SchemaKind::AllOf { all_of } => {
-                    // Walk allOf subschemas for inline object properties
-                    all_of.iter().find_map(|sub| {
-                        if let openapiv3::ReferenceOr::Item(sub_schema) = sub {
-                            if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) =
-                                &sub_schema.schema_kind
-                            {
-                                return obj
-                                    .properties
-                                    .keys()
-                                    .find(|k| k.to_lowercase().contains(&term_lower))
-                                    .cloned();
-                            }
+                    .cloned()
+            } else if let openapiv3::SchemaKind::AllOf { all_of } = &schema.schema_kind {
+                // Walk allOf subschemas for inline object properties
+                all_of.iter().find_map(|sub| {
+                    if let openapiv3::ReferenceOr::Item(sub_schema) = sub {
+                        if let Some((props, _)) = extract_object_properties(sub_schema) {
+                            return props
+                                .keys()
+                                .find(|k| k.to_lowercase().contains(&term_lower))
+                                .cloned();
                         }
-                        None
-                    })
-                }
-                _ => None,
+                    }
+                    None
+                })
+            } else {
+                None
             };
 
             if let Some(field_name) = field_match {
