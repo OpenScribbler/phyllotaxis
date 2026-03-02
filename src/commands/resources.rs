@@ -369,6 +369,99 @@ pub fn build_fields(
     fields
 }
 
+/// Extract the properties map and required list from a schema, handling both
+/// explicit `Type::Object` and implicit `AnySchema` (schemas with properties but
+/// no declared type, common in some generated specs).
+/// Recursively populate `nested_fields` for inline object properties.
+///
+/// `expand_fields_pub` (in schemas.rs) handles expansion of fields that reference
+/// named schemas via `nested_schema_name`. But inline objects — those defined directly
+/// in the schema with `type: object` and `properties` rather than via `$ref` — have
+/// no name to look up. This function fills that gap by walking the parent schema's
+/// properties and recursively building nested fields for any inline object sub-schemas.
+fn expand_inline_objects(
+    api: &openapiv3::OpenAPI,
+    schema: &openapiv3::Schema,
+    fields: &mut Vec<Field>,
+    depth: usize,
+    max_depth: usize,
+) {
+    if depth > max_depth {
+        return;
+    }
+
+    let (properties, _) = match extract_object_properties(schema) {
+        Some(pair) => pair,
+        None => return,
+    };
+
+    for field in fields.iter_mut() {
+        // Skip fields that already have a nested_schema_name — those are handled
+        // by expand_fields_pub which looks up named schemas in components.
+        if field.nested_schema_name.is_some() {
+            continue;
+        }
+
+        // Skip fields that already have nested_fields populated (e.g. from a previous pass).
+        if !field.nested_fields.is_empty() {
+            continue;
+        }
+
+        // Look up this field's property in the parent schema
+        let ref_or = match properties.get(&field.name) {
+            Some(r) => r,
+            None => continue,
+        };
+
+        // Resolve the property schema (follow $ref if needed)
+        let resolved: Option<&openapiv3::Schema> = match ref_or {
+            openapiv3::ReferenceOr::Item(boxed) => Some(boxed),
+            openapiv3::ReferenceOr::Reference { reference } => {
+                spec::schema_name_from_ref(reference).and_then(|sname| {
+                    api.components
+                        .as_ref()
+                        .and_then(|c| c.schemas.get(sname))
+                        .and_then(|s| match s {
+                            openapiv3::ReferenceOr::Item(schema) => {
+                                Some(schema as &openapiv3::Schema)
+                            }
+                            _ => None,
+                        })
+                })
+            }
+        };
+
+        let resolved = match resolved {
+            Some(s) => s,
+            None => continue,
+        };
+
+        // Check if this property is an inline object with sub-properties
+        let (sub_properties, sub_required) = match extract_object_properties(resolved) {
+            Some(pair) => pair,
+            None => continue,
+        };
+        if sub_properties.is_empty() {
+            continue;
+        }
+
+        // Build nested fields from the inline object's properties
+        let mut nested = build_fields(api, resolved, &sub_required);
+
+        // Recursively expand any inline objects within the nested fields
+        expand_inline_objects(api, resolved, &mut nested, depth + 1, max_depth);
+
+        // Also let expand_fields_pub handle any $ref-based nested schemas within
+        {
+            use crate::commands::schemas::expand_fields_pub;
+            let mut visited = std::collections::HashSet::new();
+            nested = expand_fields_pub(api, nested, &mut visited, depth + 1, max_depth);
+        }
+
+        field.nested_fields = nested;
+    }
+}
+
 fn extract_constraints(kind: &openapiv3::SchemaKind) -> Vec<String> {
     let mut c = Vec::new();
     match kind {
@@ -875,7 +968,8 @@ fn expand_response_schema(
             .map(|(_, req)| req)
             .unwrap_or_default();
 
-        let fields = build_fields(api, schema, &required);
+        let mut fields = build_fields(api, schema, &required);
+        expand_inline_objects(api, schema, &mut fields, 1, 5);
         let mut visited = std::collections::HashSet::new();
         visited.insert(variant_name.to_string());
         let expanded = expand_fields_pub(api, fields, &mut visited, 1, 5);
@@ -1069,6 +1163,7 @@ fn extract_request_body(
                 let mut fields = build_fields(api, item_schema, &required);
 
                 if expand {
+                    expand_inline_objects(api, item_schema, &mut fields, 1, 5);
                     use crate::commands::schemas::expand_fields_pub;
                     let mut visited = std::collections::HashSet::new();
                     fields = expand_fields_pub(api, fields, &mut visited, 1, 5);
@@ -1093,6 +1188,7 @@ fn extract_request_body(
     let mut fields = build_fields(api, schema, &required);
 
     if expand {
+        expand_inline_objects(api, schema, &mut fields, 1, 5);
         use crate::commands::schemas::expand_fields_pub;
         let mut visited = std::collections::HashSet::new();
         fields = expand_fields_pub(api, fields, &mut visited, 1, 5);
@@ -2148,6 +2244,44 @@ paths:
             resp_200.schema_ref.as_deref(),
             Some("Pet[]"),
             "Direct array with $ref items should still resolve to 'Type[]'"
+        );
+    }
+
+    // ─── --expand for inline request body objects ───
+
+    #[test]
+    fn test_expand_inline_object_in_request_body() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "PUT", "/admin/settings", true, "phyllotaxis")
+            .expect("Expected PUT /admin/settings endpoint");
+        let body = ep.request_body.expect("Expected request body");
+
+        let smtp = body.fields.iter().find(|f| f.name == "smtp_config")
+            .expect("Expected smtp_config field");
+        assert!(
+            !smtp.nested_fields.is_empty(),
+            "With expand, smtp_config should have nested fields for its inline properties"
+        );
+
+        let nested_names: Vec<&str> = smtp.nested_fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(nested_names.contains(&"host"), "missing nested 'host': {:?}", nested_names);
+        assert!(nested_names.contains(&"port"), "missing nested 'port': {:?}", nested_names);
+        assert!(nested_names.contains(&"username"), "missing nested 'username': {:?}", nested_names);
+        assert!(nested_names.contains(&"password"), "missing nested 'password': {:?}", nested_names);
+    }
+
+    #[test]
+    fn test_no_expand_inline_object_stays_empty() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "PUT", "/admin/settings", false, "phyllotaxis")
+            .expect("Expected PUT /admin/settings endpoint");
+        let body = ep.request_body.expect("Expected request body");
+
+        let smtp = body.fields.iter().find(|f| f.name == "smtp_config")
+            .expect("Expected smtp_config field");
+        assert!(
+            smtp.nested_fields.is_empty(),
+            "Without expand, smtp_config should NOT have nested fields"
         );
     }
 }
