@@ -1197,6 +1197,20 @@ components:
         - $ref: '#/components/schemas/FileMetadata'
       description: A search result can be a user, pet, or file
 
+    # ── oneOf/anyOf with inline types ────────────
+    InsecureSsl:
+      description: SSL verification setting — a boolean or a string path to a CA bundle
+      oneOf:
+        - type: boolean
+        - type: string
+
+    FlexibleValue:
+      description: A value that can be a string, number, or integer
+      anyOf:
+        - type: string
+        - type: number
+        - type: integer
+
     # ── not example ──────────────────────────────
     NonAdminRole:
       not:

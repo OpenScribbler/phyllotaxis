@@ -181,7 +181,17 @@ fn extract_variant_names(refs: &[openapiv3::ReferenceOr<openapiv3::Schema>]) -> 
             openapiv3::ReferenceOr::Reference { reference } => {
                 spec::schema_name_from_ref(reference).map(|s| s.to_string())
             }
-            _ => None,
+            openapiv3::ReferenceOr::Item(schema) => match &schema.schema_kind {
+                openapiv3::SchemaKind::Type(t) => Some(match t {
+                    openapiv3::Type::String(_) => "string".to_string(),
+                    openapiv3::Type::Number(_) => "number".to_string(),
+                    openapiv3::Type::Integer(_) => "integer".to_string(),
+                    openapiv3::Type::Boolean(_) => "boolean".to_string(),
+                    openapiv3::Type::Array(_) => "array".to_string(),
+                    openapiv3::Type::Object(_) => "object".to_string(),
+                }),
+                _ => None,
+            },
         })
         .collect()
 }
@@ -476,5 +486,54 @@ mod tests {
             "Object schemas should not have base_type, got: {:?}",
             model.base_type
         );
+    }
+
+    #[test]
+    fn test_oneof_inline_types() {
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "InsecureSsl", false, 5).unwrap();
+        match &model.composition {
+            Some(Composition::OneOf(variants)) => {
+                assert!(
+                    variants.contains(&"boolean".to_string()),
+                    "Expected 'boolean' variant, got: {:?}",
+                    variants
+                );
+                assert!(
+                    variants.contains(&"string".to_string()),
+                    "Expected 'string' variant, got: {:?}",
+                    variants
+                );
+                assert_eq!(variants.len(), 2, "Expected 2 variants, got: {:?}", variants);
+            }
+            other => panic!("Expected OneOf composition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_anyof_inline_types() {
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "FlexibleValue", false, 5).unwrap();
+        match &model.composition {
+            Some(Composition::AnyOf(variants)) => {
+                assert!(
+                    variants.contains(&"string".to_string()),
+                    "Expected 'string' variant, got: {:?}",
+                    variants
+                );
+                assert!(
+                    variants.contains(&"number".to_string()),
+                    "Expected 'number' variant, got: {:?}",
+                    variants
+                );
+                assert!(
+                    variants.contains(&"integer".to_string()),
+                    "Expected 'integer' variant, got: {:?}",
+                    variants
+                );
+                assert_eq!(variants.len(), 3, "Expected 3 variants, got: {:?}", variants);
+            }
+            other => panic!("Expected AnyOf composition, got {:?}", other),
+        }
     }
 }

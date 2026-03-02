@@ -66,6 +66,9 @@ pub struct Response {
     pub example: Option<serde_json::Value>,
     pub headers: Vec<ResponseHeader>,
     pub links: Vec<ResponseLink>,
+    /// Expanded schema fields, populated when --expand is used on endpoint detail
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<Field>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

@@ -257,16 +257,20 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
         }
     }
 
-    // Responses: success first, then errors
+    // Responses: success first, then default, then errors
     let successes: Vec<_> = endpoint
         .responses
         .iter()
         .filter(|r| r.status_code.starts_with('2'))
         .collect();
+    let default_resp: Option<&_> = endpoint
+        .responses
+        .iter()
+        .find(|r| r.status_code == "default");
     let errors: Vec<_> = endpoint
         .responses
         .iter()
-        .filter(|r| !r.status_code.starts_with('2'))
+        .filter(|r| !r.status_code.starts_with('2') && r.status_code != "default")
         .collect();
 
     let arrow = if is_tty { "→" } else { "->" };
@@ -299,7 +303,21 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
                     }
                 }
             }
+
+            if !resp.fields.is_empty() {
+                out.push_str("  Fields:\n");
+                render_fields_section(&mut out, &resp.fields);
+            }
         }
+    }
+
+    if let Some(resp) = default_resp {
+        let schema = resp
+            .schema_ref
+            .as_ref()
+            .map(|s| format!(" {} {}", arrow, sanitize(s)))
+            .unwrap_or_default();
+        writeln!(out, "\nDefault Response:\n  {}{}", sanitize(&resp.description), schema).unwrap();
     }
 
     if !errors.is_empty() {
@@ -794,6 +812,12 @@ pub fn render_search(results: &crate::commands::search::SearchResults, bin_name:
 
     if !has_any {
         writeln!(out, "No results found for \"{}\".", results.term).unwrap();
+        if !results.suggestions.is_empty() {
+            writeln!(out, "Did you mean:").unwrap();
+            for s in &results.suggestions {
+                writeln!(out, "  {} search {}", bin_name, s).unwrap();
+            }
+        }
         return out;
     }
 
@@ -1521,6 +1545,7 @@ mod tests {
                     example: None,
                     headers: vec![],
                     links: vec![],
+                    fields: vec![],
                 },
                 Response {
                     status_code: "400".to_string(),
@@ -1529,6 +1554,7 @@ mod tests {
                     example: None,
                     headers: vec![],
                     links: vec![],
+                    fields: vec![],
                 },
             ],
             security_schemes: vec!["bearerAuth".to_string()],
@@ -1549,6 +1575,91 @@ mod tests {
         assert!(
             output.contains("Request Example:"),
             "Missing request example"
+        );
+    }
+
+    #[test]
+    fn test_render_default_response_not_in_errors() {
+        use crate::models::resource::*;
+
+        let endpoint = Endpoint {
+            method: "GET".to_string(),
+            path: "/users".to_string(),
+            summary: None,
+            description: None,
+            is_deprecated: false,
+            is_alpha: false,
+            external_docs: None,
+            parameters: vec![],
+            request_body: None,
+            responses: vec![
+                Response {
+                    status_code: "200".to_string(),
+                    description: "OK".to_string(),
+                    schema_ref: Some("UserList".to_string()),
+                    example: None,
+                    headers: vec![],
+                    links: vec![],
+                    fields: vec![],
+                },
+                Response {
+                    status_code: "default".to_string(),
+                    description: "Unexpected server error".to_string(),
+                    schema_ref: Some("Error".to_string()),
+                    example: None,
+                    headers: vec![],
+                    links: vec![],
+                    fields: vec![],
+                },
+                Response {
+                    status_code: "401".to_string(),
+                    description: "Unauthorized".to_string(),
+                    schema_ref: None,
+                    example: None,
+                    headers: vec![],
+                    links: vec![],
+                    fields: vec![],
+                },
+            ],
+            security_schemes: vec![],
+            callbacks: vec![],
+            links: vec![],
+            drill_deeper: vec![],
+        };
+
+        let output = render_endpoint_detail(&endpoint, false);
+
+        // "default" should appear in its own section, not under Errors
+        assert!(
+            output.contains("Default Response:"),
+            "Missing 'Default Response:' section, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("Unexpected server error"),
+            "Missing default response description, got:\n{}",
+            output
+        );
+
+        // The Errors section should only have 401, not "default"
+        let errors_pos = output.find("Errors:").expect("Missing Errors: section");
+        let errors_section = &output[errors_pos..];
+        assert!(
+            !errors_section.contains("default"),
+            "default response should NOT appear under Errors:, got:\n{}",
+            output
+        );
+        assert!(
+            errors_section.contains("401"),
+            "401 should still appear under Errors:, got:\n{}",
+            output
+        );
+
+        // Default response should include its schema ref
+        assert!(
+            output.contains("Error"),
+            "Missing schema ref in default response, got:\n{}",
+            output
         );
     }
 
@@ -1653,6 +1764,7 @@ mod tests {
             }],
             schemas: vec![],
             callbacks: vec![],
+            suggestions: vec![],
         };
 
         let output = render_search(&results, "phyllotaxis", None, true);
@@ -1679,6 +1791,7 @@ mod tests {
             }],
             schemas: vec![],
             callbacks: vec![],
+            suggestions: vec![],
         };
 
         let output = render_search(&results, "phyllotaxis", None, true);
@@ -1704,6 +1817,7 @@ mod tests {
             }],
             schemas: vec![],
             callbacks: vec![],
+            suggestions: vec![],
         };
 
         let output = render_search(&results, "phyllotaxis", None, false);
@@ -1851,6 +1965,7 @@ mod tests {
                     },
                 ],
                 links: vec![],
+                fields: vec![],
             }],
             security_schemes: vec![],
             callbacks: vec![],
@@ -1892,6 +2007,7 @@ mod tests {
                     description: None,
                     drill_command: Some("phyllotaxis resources users GET /users/{userId}".to_string()),
                 }],
+                fields: vec![],
             }],
             security_schemes: vec![],
             callbacks: vec![],

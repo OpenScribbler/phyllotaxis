@@ -155,6 +155,20 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 println!("{}", output);
             }
             Some(name) => {
+                // Validate: if method is provided, path must also be provided
+                if method.is_some() && path.is_none() {
+                    let method_str = method.as_ref().unwrap();
+                    if cli.json {
+                        eprintln!("{}", json_error(&format!(
+                            "Missing endpoint path. Usage: {} resources {} {} <path>",
+                            bin_name, name, method_str.to_uppercase()
+                        )));
+                    } else {
+                        eprintln!("Error: Missing endpoint path.");
+                        eprintln!("Usage: {} resources {} {} <path>", bin_name, name, method_str.to_uppercase());
+                    }
+                    std::process::exit(1);
+                }
                 if let (Some(method), Some(path)) = (method, path) {
                     // Level 3: endpoint detail
                     match commands::resources::get_endpoint_detail(&loaded.api, method, path, cli.expand, &bin_name) {
@@ -167,16 +181,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                             println!("{}", output);
                         }
                         None => {
-                            if cli.json {
-                                eprintln!("{}", json_error(&format!(
-                                    "Endpoint {} {} not found.",
-                                    method.to_uppercase(),
-                                    path
-                                )));
-                            } else {
-                                eprintln!("Error: Endpoint {} {} not found.", method.to_uppercase(), path);
-                            }
-                            std::process::exit(1);
+                            anyhow::bail!("Endpoint {} {} not found.", method.to_uppercase(), path);
                         }
                     }
                 } else {
@@ -191,20 +196,18 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                             println!("{}", output);
                         }
                         None => {
-                            if cli.json {
-                                eprintln!("{}", json_error(&format!("Resource '{}' not found.", name)));
-                            } else {
+                            let mut msg = format!("Resource '{}' not found.", name);
+                            if !cli.json {
                                 let groups = commands::resources::extract_resource_groups(&loaded.api);
                                 let suggestions = commands::resources::suggest_similar(&groups, name);
-                                eprintln!("Error: Resource '{}' not found.", name);
                                 if !suggestions.is_empty() {
-                                    eprintln!("Did you mean:");
+                                    msg.push_str("\nDid you mean:");
                                     for s in &suggestions {
-                                        eprintln!("  {} resources {}", bin_name, s);
+                                        msg.push_str(&format!("\n  {} resources {}", bin_name, s));
                                     }
                                 }
                             }
-                            std::process::exit(1);
+                            anyhow::bail!("{}", msg);
                         }
                     }
                 }
@@ -236,22 +239,20 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                         println!("{}", output);
                     }
                     None => {
-                        if cli.json {
-                            eprintln!("{}", json_error(&format!("Schema '{}' not found.", schema_name)));
-                        } else {
+                        let mut msg = format!("Schema '{}' not found.", schema_name);
+                        if !cli.json {
                             let suggestions = commands::schemas::suggest_similar_schemas(
                                 &loaded.api,
                                 schema_name,
                             );
-                            eprintln!("Error: Schema '{}' not found.", schema_name);
                             if !suggestions.is_empty() {
-                                eprintln!("Did you mean:");
+                                msg.push_str("\nDid you mean:");
                                 for s in &suggestions {
-                                    eprintln!("  {} schemas {}", bin_name, s);
+                                    msg.push_str(&format!("\n  {} schemas {}", bin_name, s));
                                 }
                             }
                         }
-                        std::process::exit(1);
+                        anyhow::bail!("{}", msg);
                     }
                 }
             }
@@ -268,13 +269,14 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Commands::Search { term, limit }) => {
             let term_trimmed = term.trim();
             if term_trimmed.is_empty() {
-                if cli.json {
-                    eprintln!("{}", json_error("Please provide a search term."));
-                } else {
-                    eprintln!("Error: Please provide a search term.");
-                    eprintln!("Use '{} resources' or '{} schemas' to list all items.", bin_name, bin_name);
+                let mut msg = "Please provide a search term.".to_string();
+                if !cli.json {
+                    msg.push_str(&format!(
+                        "\nUse '{} resources' or '{} schemas' to list all items.",
+                        bin_name, bin_name
+                    ));
                 }
-                std::process::exit(1);
+                anyhow::bail!("{}", msg);
             }
             let results = commands::search::search(&loaded.api, term_trimmed);
             let output = if cli.json {
@@ -306,19 +308,17 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                             println!("{}", output);
                         }
                         None => {
-                            if cli.json {
-                                eprintln!("{}", json_error(&format!("Callback '{}' not found.", name)));
-                            } else {
-                                eprintln!("Error: Callback '{}' not found.", name);
+                            let mut msg = format!("Callback '{}' not found.", name);
+                            if !cli.json {
                                 let suggestions = commands::callbacks::suggest_similar_callbacks(&callbacks, name);
                                 if !suggestions.is_empty() {
-                                    eprintln!("Did you mean:");
+                                    msg.push_str("\nDid you mean:");
                                     for s in &suggestions {
-                                        eprintln!("  {} callbacks {}", bin_name, s);
+                                        msg.push_str(&format!("\n  {} callbacks {}", bin_name, s));
                                     }
                                 }
                             }
-                            std::process::exit(1);
+                            anyhow::bail!("{}", msg);
                         }
                     }
                 }

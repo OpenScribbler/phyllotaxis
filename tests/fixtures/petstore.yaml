@@ -23,6 +23,13 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+  requestBodies:
+    PetUpdate:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Pet'
   schemas:
     Pet:
       type: object
@@ -168,6 +175,21 @@ paths:
       responses:
         "204":
           description: Deleted
+    put:
+      tags: [Pets]
+      summary: Update a pet
+      operationId: updatePet
+      requestBody:
+        $ref: '#/components/requestBodies/PetUpdate'
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        "404":
+          description: Pet not found
   /old-pets:
     get:
       tags: ["Deprecated Pets (Deprecated)"]
