@@ -76,6 +76,14 @@ fn json_error(msg: &str) -> String {
     serde_json::json!({"error": msg}).to_string()
 }
 
+fn json_error_with_suggestions(msg: &str, suggestions: &[String]) -> String {
+    if suggestions.is_empty() {
+        serde_json::json!({"error": msg}).to_string()
+    } else {
+        serde_json::json!({"error": msg, "suggestions": suggestions}).to_string()
+    }
+}
+
 /// Extract the binary filename from argv[0], falling back to "phyllotaxis".
 fn detect_bin_name() -> String {
     std::env::args()
@@ -194,18 +202,23 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                             println!("{}", output);
                         }
                         None => {
-                            let mut msg = format!("Resource '{}' not found.", name);
-                            if !cli.json {
-                                let groups = commands::resources::extract_resource_groups(&loaded.api);
-                                let suggestions = commands::resources::suggest_similar(&groups, name);
-                                if !suggestions.is_empty() {
-                                    msg.push_str("\nDid you mean:");
-                                    for s in &suggestions {
-                                        msg.push_str(&format!("\n  {} resources {}", bin_name, s));
+                            let msg = format!("Resource '{}' not found.", name);
+                            let groups = commands::resources::extract_resource_groups(&loaded.api);
+                            let slugs = commands::resources::suggest_similar(&groups, name);
+                            if cli.json {
+                                let cmds: Vec<String> = slugs.iter().map(|s| format!("{} resources {}", bin_name, s)).collect();
+                                eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
+                                std::process::exit(1);
+                            } else {
+                                let mut full_msg = msg;
+                                if !slugs.is_empty() {
+                                    full_msg.push_str("\nDid you mean:");
+                                    for s in &slugs {
+                                        full_msg.push_str(&format!("\n  {} resources {}", bin_name, s));
                                     }
                                 }
+                                anyhow::bail!("{}", full_msg);
                             }
-                            anyhow::bail!("{}", msg);
                         }
                     }
                 }
@@ -237,20 +250,25 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                         println!("{}", output);
                     }
                     None => {
-                        let mut msg = format!("Schema '{}' not found.", schema_name);
-                        if !cli.json {
-                            let suggestions = commands::schemas::suggest_similar_schemas(
-                                &loaded.api,
-                                schema_name,
-                            );
-                            if !suggestions.is_empty() {
-                                msg.push_str("\nDid you mean:");
-                                for s in &suggestions {
-                                    msg.push_str(&format!("\n  {} schemas {}", bin_name, s));
+                        let msg = format!("Schema '{}' not found.", schema_name);
+                        let similar = commands::schemas::suggest_similar_schemas(
+                            &loaded.api,
+                            schema_name,
+                        );
+                        if cli.json {
+                            let cmds: Vec<String> = similar.iter().map(|s| format!("{} schemas {}", bin_name, s)).collect();
+                            eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
+                            std::process::exit(1);
+                        } else {
+                            let mut full_msg = msg;
+                            if !similar.is_empty() {
+                                full_msg.push_str("\nDid you mean:");
+                                for s in &similar {
+                                    full_msg.push_str(&format!("\n  {} schemas {}", bin_name, s));
                                 }
                             }
+                            anyhow::bail!("{}", full_msg);
                         }
-                        anyhow::bail!("{}", msg);
                     }
                 }
             }
@@ -306,17 +324,22 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                             println!("{}", output);
                         }
                         None => {
-                            let mut msg = format!("Callback '{}' not found.", name);
-                            if !cli.json {
-                                let suggestions = commands::callbacks::suggest_similar_callbacks(&callbacks, name);
-                                if !suggestions.is_empty() {
-                                    msg.push_str("\nDid you mean:");
-                                    for s in &suggestions {
-                                        msg.push_str(&format!("\n  {} callbacks {}", bin_name, s));
+                            let msg = format!("Callback '{}' not found.", name);
+                            let similar = commands::callbacks::suggest_similar_callbacks(&callbacks, name);
+                            if cli.json {
+                                let cmds: Vec<String> = similar.iter().map(|s| format!("{} callbacks {}", bin_name, s)).collect();
+                                eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
+                                std::process::exit(1);
+                            } else {
+                                let mut full_msg = msg;
+                                if !similar.is_empty() {
+                                    full_msg.push_str("\nDid you mean:");
+                                    for s in &similar {
+                                        full_msg.push_str(&format!("\n  {} callbacks {}", bin_name, s));
                                     }
                                 }
+                                anyhow::bail!("{}", full_msg);
                             }
-                            anyhow::bail!("{}", msg);
                         }
                     }
                 }
