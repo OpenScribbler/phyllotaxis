@@ -117,11 +117,13 @@ pub fn build_schema_model(
         }
         openapiv3::SchemaKind::OneOf { one_of } => {
             let variants = extract_variant_names(one_of);
-            (Vec::new(), Some(Composition::OneOf(variants)))
+            let fields = extract_composition_fields(api, one_of);
+            (fields, Some(Composition::OneOf(variants)))
         }
         openapiv3::SchemaKind::AnyOf { any_of } => {
             let variants = extract_variant_names(any_of);
-            (Vec::new(), Some(Composition::AnyOf(variants)))
+            let fields = extract_composition_fields(api, any_of);
+            (fields, Some(Composition::AnyOf(variants)))
         }
         _ => (Vec::new(), None),
     };
@@ -178,6 +180,57 @@ pub fn build_schema_model(
         external_docs: None,
         base_type: base_type.map(|s| s.to_string()),
     })
+}
+
+/// Collect fields from anyOf/oneOf variant schemas.
+///
+/// For $ref variants, resolves the referenced schema and extracts its object fields.
+/// For inline object variants, extracts fields directly.
+/// Fields are merged across all variants (deduplicating by name — last variant wins).
+///
+/// Why: anyOf/oneOf schemas would otherwise show zero fields, making the schema detail
+/// completely empty. This gives the user visibility into what fields each variant provides.
+fn extract_composition_fields(
+    api: &openapiv3::OpenAPI,
+    variants: &[openapiv3::ReferenceOr<openapiv3::Schema>],
+) -> Vec<Field> {
+    let mut all_fields: Vec<Field> = Vec::new();
+
+    for variant in variants {
+        let resolved: Option<&openapiv3::Schema> = match variant {
+            openapiv3::ReferenceOr::Reference { reference } => {
+                spec::schema_name_from_ref(reference).and_then(|sname| {
+                    api.components
+                        .as_ref()
+                        .and_then(|c| c.schemas.get(sname))
+                        .and_then(|s| match s {
+                            openapiv3::ReferenceOr::Item(schema) => Some(schema as &openapiv3::Schema),
+                            _ => None,
+                        })
+                })
+            }
+            openapiv3::ReferenceOr::Item(schema) => Some(schema),
+        };
+
+        let schema = match resolved {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let required = match &schema.schema_kind {
+            openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => obj.required.clone(),
+            _ => vec![],
+        };
+
+        let fields = build_fields(api, schema, &required);
+        for field in fields {
+            // Dedup by name — later variant wins
+            all_fields.retain(|f| f.name != field.name);
+            all_fields.push(field);
+        }
+    }
+
+    all_fields
 }
 
 fn extract_variant_names(refs: &[openapiv3::ReferenceOr<openapiv3::Schema>]) -> Vec<String> {
@@ -537,5 +590,62 @@ mod tests {
             }
             other => panic!("Expected AnyOf composition, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_anyof_ref_variants_have_fields() {
+        // SearchResult is anyOf [User, PetBase, FileMetadata] — all $ref variants.
+        // Previously returned zero fields; now should merge fields from all variants.
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "SearchResult", false, 5).unwrap();
+
+        assert!(!model.fields.is_empty(), "anyOf with $ref variants should have merged fields");
+
+        let field_names: Vec<&str> = model.fields.iter().map(|f| f.name.as_str()).collect();
+        // From User:
+        assert!(field_names.contains(&"username"), "Missing User field 'username': {:?}", field_names);
+        assert!(field_names.contains(&"email"), "Missing User field 'email': {:?}", field_names);
+        // From PetBase:
+        assert!(field_names.contains(&"species"), "Missing PetBase field 'species': {:?}", field_names);
+        // From FileMetadata:
+        assert!(field_names.contains(&"filename"), "Missing FileMetadata field 'filename': {:?}", field_names);
+
+        // Composition should still be present
+        match &model.composition {
+            Some(Composition::AnyOf(variants)) => {
+                assert_eq!(variants.len(), 3);
+            }
+            other => panic!("Expected AnyOf composition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_oneof_ref_variants_have_fields() {
+        // Pet is oneOf [Dog, Cat, Bird] — all $ref variants.
+        // Should merge fields from all variants (plus their allOf bases).
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "Pet", false, 5).unwrap();
+
+        assert!(!model.fields.is_empty(), "oneOf with $ref variants should have merged fields");
+
+        let field_names: Vec<&str> = model.fields.iter().map(|f| f.name.as_str()).collect();
+        // From PetBase (shared via allOf):
+        assert!(field_names.contains(&"name"), "Missing PetBase field 'name': {:?}", field_names);
+        assert!(field_names.contains(&"species"), "Missing PetBase field 'species': {:?}", field_names);
+        // From Dog:
+        assert!(field_names.contains(&"breed"), "Missing Dog field 'breed': {:?}", field_names);
+        // From Cat:
+        assert!(field_names.contains(&"indoor"), "Missing Cat field 'indoor': {:?}", field_names);
+        // From Bird:
+        assert!(field_names.contains(&"can_fly"), "Missing Bird field 'can_fly': {:?}", field_names);
+    }
+
+    #[test]
+    fn test_oneof_inline_primitives_no_fields() {
+        // InsecureSsl is oneOf [boolean, string] — inline primitive types.
+        // Should have no fields (primitives have no object properties).
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "InsecureSsl", false, 5).unwrap();
+        assert!(model.fields.is_empty(), "oneOf with inline primitives should have no fields");
     }
 }

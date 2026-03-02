@@ -613,6 +613,71 @@ fn build_link_drill_command(
     None
 }
 
+/// Extract a human-readable schema ref string from a response media type's schema.
+///
+/// Handles three patterns:
+/// 1. Direct $ref → "SchemaName"
+/// 2. Inline array with $ref items → "SchemaName[]"
+/// 3. Inline anyOf/oneOf with $ref variants → "SchemaA | SchemaB"
+///
+/// Returns None for inline object schemas or schemas without recognizable structure.
+fn resolve_response_schema_ref(schema_ref: &openapiv3::ReferenceOr<openapiv3::Schema>) -> Option<String> {
+    match schema_ref {
+        openapiv3::ReferenceOr::Reference { reference } => {
+            spec::schema_name_from_ref(reference).map(|s| s.to_string())
+        }
+        openapiv3::ReferenceOr::Item(schema) => {
+            match &schema.schema_kind {
+                openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) => {
+                    match &arr.items {
+                        Some(openapiv3::ReferenceOr::Reference { reference }) => {
+                            spec::schema_name_from_ref(reference)
+                                .map(|s| format!("{}[]", s))
+                        }
+                        Some(openapiv3::ReferenceOr::Item(item_schema)) => {
+                            Some(format!("{}[]", format_type_display(&item_schema.schema_kind)))
+                        }
+                        None => Some("array".to_string()),
+                    }
+                }
+                openapiv3::SchemaKind::AnyOf { any_of } => {
+                    let names = extract_composition_variant_names(any_of);
+                    if names.is_empty() { None } else { Some(names.join(" | ")) }
+                }
+                openapiv3::SchemaKind::OneOf { one_of } => {
+                    let names = extract_composition_variant_names(one_of);
+                    if names.is_empty() { None } else { Some(names.join(" | ")) }
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Extract variant names from anyOf/oneOf schema references.
+/// For $ref variants, returns the schema name; for inline types, returns the type name.
+fn extract_composition_variant_names(variants: &[openapiv3::ReferenceOr<openapiv3::Schema>]) -> Vec<String> {
+    variants
+        .iter()
+        .filter_map(|r| match r {
+            openapiv3::ReferenceOr::Reference { reference } => {
+                spec::schema_name_from_ref(reference).map(|s| s.to_string())
+            }
+            openapiv3::ReferenceOr::Item(schema) => match &schema.schema_kind {
+                openapiv3::SchemaKind::Type(t) => Some(match t {
+                    openapiv3::Type::String(_) => "string".to_string(),
+                    openapiv3::Type::Number(_) => "number".to_string(),
+                    openapiv3::Type::Integer(_) => "integer".to_string(),
+                    openapiv3::Type::Boolean(_) => "boolean".to_string(),
+                    openapiv3::Type::Array(_) => "array".to_string(),
+                    openapiv3::Type::Object(_) => "object".to_string(),
+                }),
+                _ => None,
+            },
+        })
+        .collect()
+}
+
 fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation, expand: bool, bin_name: &str) -> Vec<crate::models::resource::Response> {
     use crate::models::resource::{Response, ResponseHeader};
     let mut responses = Vec::new();
@@ -631,28 +696,7 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation,
             .content
             .get("application/json")
             .map(|media| {
-                let schema_ref = media.schema.as_ref().and_then(|sr| match sr {
-                    openapiv3::ReferenceOr::Reference { reference } => {
-                        spec::schema_name_from_ref(reference).map(|s| s.to_string())
-                    }
-                    openapiv3::ReferenceOr::Item(schema) => {
-                        match &schema.schema_kind {
-                            openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) => {
-                                match &arr.items {
-                                    Some(openapiv3::ReferenceOr::Reference { reference }) => {
-                                        spec::schema_name_from_ref(reference)
-                                            .map(|s| format!("{}[]", s))
-                                    }
-                                    Some(openapiv3::ReferenceOr::Item(item_schema)) => {
-                                        Some(format!("{}[]", format_type_display(&item_schema.schema_kind)))
-                                    }
-                                    None => Some("array".to_string()),
-                                }
-                            }
-                            _ => None,
-                        }
-                    }
-                });
+                let schema_ref = media.schema.as_ref().and_then(resolve_response_schema_ref);
                 (schema_ref, media.example.clone())
             })
             .unwrap_or((None, None));
@@ -712,28 +756,7 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation,
                 .content
                 .get("application/json")
                 .map(|media| {
-                    let schema_ref = media.schema.as_ref().and_then(|sr| match sr {
-                        openapiv3::ReferenceOr::Reference { reference } => {
-                            spec::schema_name_from_ref(reference).map(|s| s.to_string())
-                        }
-                        openapiv3::ReferenceOr::Item(schema) => {
-                            match &schema.schema_kind {
-                                openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) => {
-                                    match &arr.items {
-                                        Some(openapiv3::ReferenceOr::Reference { reference }) => {
-                                            spec::schema_name_from_ref(reference)
-                                                .map(|s| format!("{}[]", s))
-                                        }
-                                        Some(openapiv3::ReferenceOr::Item(item_schema)) => {
-                                            Some(format!("{}[]", format_type_display(&item_schema.schema_kind)))
-                                        }
-                                        None => Some("array".to_string()),
-                                    }
-                                }
-                                _ => None,
-                            }
-                        }
-                    });
+                    let schema_ref = media.schema.as_ref().and_then(resolve_response_schema_ref);
                     (schema_ref, media.example.clone())
                 })
                 .unwrap_or((None, None));
@@ -792,6 +815,9 @@ fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation,
 
 /// Resolve a response's schema_ref into expanded fields using the same
 /// build_fields + expand_fields_pub infrastructure used for request bodies.
+///
+/// For anyOf/oneOf responses (schema_ref = "A | B"), expands all variants
+/// and merges their fields (deduplicating by name, last variant wins).
 fn expand_response_schema(
     api: &openapiv3::OpenAPI,
     schema_ref: &Option<String>,
@@ -803,19 +829,33 @@ fn expand_response_schema(
         None => return Vec::new(),
     };
 
-    let (_key, schema) = match find_schema(api, name) {
-        Some(pair) => pair,
-        None => return Vec::new(),
-    };
+    // Handle anyOf/oneOf pipe-separated variants
+    let variant_names: Vec<&str> = name.split(" | ").collect();
 
-    let required = extract_object_properties(schema)
-        .map(|(_, req)| req)
-        .unwrap_or_default();
+    let mut all_fields = Vec::new();
+    for variant_name in &variant_names {
+        let (_key, schema) = match find_schema(api, variant_name) {
+            Some(pair) => pair,
+            None => continue,
+        };
 
-    let fields = build_fields(api, schema, &required);
-    let mut visited = std::collections::HashSet::new();
-    visited.insert(name.to_string());
-    expand_fields_pub(api, fields, &mut visited, 1, 5)
+        let required = extract_object_properties(schema)
+            .map(|(_, req)| req)
+            .unwrap_or_default();
+
+        let fields = build_fields(api, schema, &required);
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(variant_name.to_string());
+        let expanded = expand_fields_pub(api, fields, &mut visited, 1, 5);
+
+        // Merge: dedup by name (later variant wins)
+        for field in expanded {
+            all_fields.retain(|f: &Field| f.name != field.name);
+            all_fields.push(field);
+        }
+    }
+
+    all_fields
 }
 
 fn merge_parameters(
@@ -1068,13 +1108,16 @@ pub fn get_endpoint_detail(
     let mut seen = std::collections::HashSet::new();
     let mut drill_deeper = Vec::new();
 
-    // 2xx response schema refs only (strip [] suffix for array types)
+    // 2xx response schema refs only (strip [] suffix for array types, split anyOf/oneOf pipes)
     for resp in &responses {
         if resp.status_code.starts_with('2') {
             if let Some(ref name) = resp.schema_ref {
                 let bare_name = name.strip_suffix("[]").unwrap_or(name);
-                if seen.insert(bare_name.to_string()) {
-                    drill_deeper.push(format!("{} schemas {}", bin_name, bare_name));
+                // anyOf/oneOf responses produce "A | B" — split into individual drill hints
+                for variant in bare_name.split(" | ") {
+                    if seen.insert(variant.to_string()) {
+                        drill_deeper.push(format!("{} schemas {}", bin_name, variant));
+                    }
                 }
             }
         }
@@ -1957,5 +2000,37 @@ paths:
         assert!(msg_field.required, "'message' should be required");
         let color_field = body.fields.iter().find(|f| f.name == "color").unwrap();
         assert!(!color_field.required, "'color' should be optional");
+    }
+
+    // ─── anyOf/oneOf response schema resolution ───
+
+    #[test]
+    fn test_anyof_response_schema_ref() {
+        // GET /users/{userId}/account returns anyOf [User, DeletedUser]
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "GET", "/users/{userId}/account", false, "phyllotaxis").unwrap();
+
+        let resp_200 = ep.responses.iter().find(|r| r.status_code == "200").unwrap();
+        assert_eq!(
+            resp_200.schema_ref.as_deref(),
+            Some("User | DeletedUser"),
+            "anyOf response should show pipe-separated variant names"
+        );
+    }
+
+    #[test]
+    fn test_anyof_response_drill_deeper_splits_variants() {
+        // Drill deeper should list each variant separately, not "User | DeletedUser"
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "GET", "/users/{userId}/account", false, "phyllotaxis").unwrap();
+
+        assert!(
+            ep.drill_deeper.contains(&"phyllotaxis schemas User".to_string()),
+            "Missing drill_deeper for User: {:?}", ep.drill_deeper
+        );
+        assert!(
+            ep.drill_deeper.contains(&"phyllotaxis schemas DeletedUser".to_string()),
+            "Missing drill_deeper for DeletedUser: {:?}", ep.drill_deeper
+        );
     }
 }
