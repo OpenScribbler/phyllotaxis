@@ -615,12 +615,11 @@ fn build_link_drill_command(
 
 /// Extract a human-readable schema ref string from a response media type's schema.
 ///
-/// Handles three patterns:
+/// Handles four patterns:
 /// 1. Direct $ref → "SchemaName"
 /// 2. Inline array with $ref items → "SchemaName[]"
 /// 3. Inline anyOf/oneOf with $ref variants → "SchemaA | SchemaB"
-///
-/// Returns None for inline object schemas or schemas without recognizable structure.
+/// 4. Inline object with pagination wrapper → "SchemaName[] (list)"
 fn resolve_response_schema_ref(schema_ref: &openapiv3::ReferenceOr<openapiv3::Schema>) -> Option<String> {
     match schema_ref {
         openapiv3::ReferenceOr::Reference { reference } => {
@@ -647,6 +646,34 @@ fn resolve_response_schema_ref(schema_ref: &openapiv3::ReferenceOr<openapiv3::Sc
                 openapiv3::SchemaKind::OneOf { one_of } => {
                     let names = extract_composition_variant_names(one_of);
                     if names.is_empty() { None } else { Some(names.join(" | ")) }
+                }
+                // Inline object: check for pagination wrapper pattern (data array with $ref items)
+                openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => {
+                    if let Some(data_schema_ref) = obj.properties.get("data") {
+                        match data_schema_ref {
+                            openapiv3::ReferenceOr::Item(data_schema) => {
+                                if let openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) = &data_schema.schema_kind {
+                                    match &arr.items {
+                                        Some(openapiv3::ReferenceOr::Reference { reference }) => {
+                                            return spec::schema_name_from_ref(reference)
+                                                .map(|s| format!("{}[] (list)", s));
+                                        }
+                                        Some(openapiv3::ReferenceOr::Item(item_schema)) => {
+                                            return Some(format!("{}[] (list)", format_type_display(&item_schema.schema_kind)));
+                                        }
+                                        None => {
+                                            return Some("array (list)".to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            openapiv3::ReferenceOr::Reference { reference } => {
+                                return spec::schema_name_from_ref(reference)
+                                    .map(|s| format!("{} (list)", s));
+                            }
+                        }
+                    }
+                    Some("object".to_string())
                 }
                 _ => None,
             }
@@ -677,6 +704,7 @@ fn extract_composition_variant_names(variants: &[openapiv3::ReferenceOr<openapiv
         })
         .collect()
 }
+
 
 fn extract_responses(api: &openapiv3::OpenAPI, operation: &openapiv3::Operation, expand: bool, bin_name: &str) -> Vec<crate::models::resource::Response> {
     use crate::models::resource::{Response, ResponseHeader};
@@ -825,7 +853,11 @@ fn expand_response_schema(
     use crate::commands::schemas::{find_schema, expand_fields_pub};
 
     let name = match schema_ref {
-        Some(n) => n.strip_suffix("[]").unwrap_or(n),
+        Some(n) => {
+            // Strip suffixes like "[] (list)", "[]", " (list)" to get the bare schema name
+            let n = n.strip_suffix(" (list)").unwrap_or(n);
+            n.strip_suffix("[]").unwrap_or(n)
+        }
         None => return Vec::new(),
     };
 
@@ -1108,14 +1140,16 @@ pub fn get_endpoint_detail(
     let mut seen = std::collections::HashSet::new();
     let mut drill_deeper = Vec::new();
 
-    // 2xx response schema refs only (strip [] suffix for array types, split anyOf/oneOf pipes)
+    // 2xx response schema refs: strip suffixes, split anyOf/oneOf pipes, skip "object"
     for resp in &responses {
         if resp.status_code.starts_with('2') {
             if let Some(ref name) = resp.schema_ref {
-                let bare_name = name.strip_suffix("[]").unwrap_or(name);
+                let bare_name = name.strip_suffix(" (list)").unwrap_or(name);
+                let bare_name = bare_name.strip_suffix("[]").unwrap_or(bare_name);
                 // anyOf/oneOf responses produce "A | B" — split into individual drill hints
                 for variant in bare_name.split(" | ") {
-                    if seen.insert(variant.to_string()) {
+                    // Skip generic "object" — no schema to drill into
+                    if variant != "object" && seen.insert(variant.to_string()) {
                         drill_deeper.push(format!("{} schemas {}", bin_name, variant));
                     }
                 }
@@ -2031,6 +2065,89 @@ paths:
         assert!(
             ep.drill_deeper.contains(&"phyllotaxis schemas DeletedUser".to_string()),
             "Missing drill_deeper for DeletedUser: {:?}", ep.drill_deeper
+        );
+    }
+
+    // ─── Inline pagination/object response schema resolution ───
+
+    #[test]
+    fn test_inline_pagination_wrapper_response_schema() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "GET", "/users/paginated", false, "phyllotaxis")
+            .expect("Expected GET /users/paginated endpoint");
+        let resp_200 = ep.responses.iter().find(|r| r.status_code == "200")
+            .expect("Expected 200 response");
+        assert_eq!(
+            resp_200.schema_ref.as_deref(),
+            Some("User[] (list)"),
+            "Inline pagination wrapper with data.$ref array should resolve to 'User[] (list)'"
+        );
+    }
+
+    #[test]
+    fn test_inline_object_response_schema() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "GET", "/users/summary", false, "phyllotaxis")
+            .expect("Expected GET /users/summary endpoint");
+        let resp_200 = ep.responses.iter().find(|r| r.status_code == "200")
+            .expect("Expected 200 response");
+        assert_eq!(
+            resp_200.schema_ref.as_deref(),
+            Some("object"),
+            "Inline object without data array should resolve to 'object'"
+        );
+    }
+
+    #[test]
+    fn test_inline_pagination_drill_deeper_uses_item_type() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "GET", "/users/paginated", false, "phyllotaxis")
+            .expect("Expected GET /users/paginated endpoint");
+        assert!(
+            ep.drill_deeper.iter().any(|d| d.contains("User")),
+            "Drill deeper should reference the User item type, not the wrapper. Got: {:?}",
+            ep.drill_deeper
+        );
+    }
+
+    #[test]
+    fn test_inline_object_no_drill_deeper() {
+        let api = load_kitchen_sink();
+        let ep = get_endpoint_detail(&api, "GET", "/users/summary", false, "phyllotaxis")
+            .expect("Expected GET /users/summary endpoint");
+        let has_object_drill = ep.drill_deeper.iter().any(|d| d.contains("object"));
+        assert!(
+            !has_object_drill,
+            "Generic inline object should not produce a drill-deeper hint. Got: {:?}",
+            ep.drill_deeper
+        );
+    }
+
+    #[test]
+    fn test_direct_ref_response_still_works() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "GET", "/pets/{id}", false, "phyllotaxis")
+            .expect("Expected GET /pets/{id} endpoint");
+        let resp_200 = ep.responses.iter().find(|r| r.status_code == "200")
+            .expect("Expected 200 response");
+        assert_eq!(
+            resp_200.schema_ref.as_deref(),
+            Some("Pet"),
+            "Direct $ref response should still resolve to schema name"
+        );
+    }
+
+    #[test]
+    fn test_direct_array_response_still_works() {
+        let api = load_petstore();
+        let ep = get_endpoint_detail(&api, "GET", "/pets", false, "phyllotaxis")
+            .expect("Expected GET /pets endpoint");
+        let resp_200 = ep.responses.iter().find(|r| r.status_code == "200")
+            .expect("Expected 200 response");
+        assert_eq!(
+            resp_200.schema_ref.as_deref(),
+            Some("Pet[]"),
+            "Direct array with $ref items should still resolve to 'Type[]'"
         );
     }
 }
