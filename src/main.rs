@@ -158,16 +158,14 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 // Validate: if method is provided, path must also be provided
                 if method.is_some() && path.is_none() {
                     let method_str = method.as_ref().unwrap();
-                    if cli.json {
-                        eprintln!("{}", json_error(&format!(
-                            "Missing endpoint path. Usage: {} resources {} {} <path>",
+                    let mut msg = "Missing endpoint path.".to_string();
+                    if !cli.json {
+                        msg.push_str(&format!(
+                            "\nUsage: {} resources {} {} <path>",
                             bin_name, name, method_str.to_uppercase()
-                        )));
-                    } else {
-                        eprintln!("Error: Missing endpoint path.");
-                        eprintln!("Usage: {} resources {} {} <path>", bin_name, name, method_str.to_uppercase());
+                        ));
                     }
-                    std::process::exit(1);
+                    anyhow::bail!("{}", msg);
                 }
                 if let (Some(method), Some(path)) = (method, path) {
                     // Level 3: endpoint detail
