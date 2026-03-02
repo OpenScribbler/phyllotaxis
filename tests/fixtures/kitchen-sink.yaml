@@ -852,6 +852,32 @@ paths:
                     type: integer
 
   # ──────────────────────────────────────────────
+  # COMPOSITION — Response-level anyOf/oneOf
+  # ──────────────────────────────────────────────
+  /users/{userId}/account:
+    get:
+      tags: [Users]
+      operationId: getUserAccount
+      summary: Get user account (may be active or deleted)
+      description: Returns anyOf active_account or deleted_account depending on state.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Account info
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/User'
+                  - $ref: '#/components/schemas/DeletedUser'
+
+  # ──────────────────────────────────────────────
   # HEALTH — Rare HTTP methods, no auth
   # ──────────────────────────────────────────────
   /health:
@@ -1210,6 +1236,21 @@ components:
         - type: string
         - type: number
         - type: integer
+
+    # ── Deleted user (for anyOf response tests) ──
+    DeletedUser:
+      type: object
+      required: [id, deleted_at]
+      description: A user account that has been soft-deleted
+      properties:
+        id:
+          type: string
+          format: uuid
+        deleted_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
 
     # ── not example ──────────────────────────────
     NonAdminRole:
