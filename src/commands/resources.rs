@@ -216,6 +216,26 @@ pub fn get_resource_detail(api: &openapiv3::OpenAPI, slug: &str) -> Option<Resou
     Some(groups.into_iter().nth(idx).unwrap())
 }
 
+/// Extract object-like properties from a schema, handling both explicit `type: object`
+/// and implicit objects (schemas with `properties` but no `type` field, which openapiv3
+/// parses as `SchemaKind::Any`).
+pub fn extract_object_properties(
+    schema: &openapiv3::Schema,
+) -> Option<(
+    &indexmap::IndexMap<String, openapiv3::ReferenceOr<Box<openapiv3::Schema>>>,
+    Vec<String>,
+)> {
+    match &schema.schema_kind {
+        openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => {
+            Some((&obj.properties, obj.required.clone()))
+        }
+        openapiv3::SchemaKind::Any(any) if !any.properties.is_empty() => {
+            Some((&any.properties, any.required.clone()))
+        }
+        _ => None,
+    }
+}
+
 pub fn build_fields(
     api: &openapiv3::OpenAPI,
     schema: &openapiv3::Schema,
@@ -246,10 +266,8 @@ pub fn build_fields(
 
             if let Some(resolved) = resolved {
                 // Collect required fields from this constituent
-                if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) =
-                    &resolved.schema_kind
-                {
-                    for r in &obj.required {
+                if let Some((_, req)) = extract_object_properties(resolved) {
+                    for r in &req {
                         if !merged_required.contains(r) {
                             merged_required.push(r.clone());
                         }
@@ -268,14 +286,14 @@ pub fn build_fields(
         return all_fields;
     }
 
-    let obj = match &schema.schema_kind {
-        openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => obj,
-        _ => return Vec::new(),
+    let properties = match extract_object_properties(schema) {
+        Some((props, _)) => props,
+        None => return Vec::new(),
     };
 
     let mut fields = Vec::new();
 
-    for (name, ref_or) in &obj.properties {
+    for (name, ref_or) in properties {
         let (resolved_schema, schema_name): (Option<&openapiv3::Schema>, Option<&str>) =
             match ref_or {
                 openapiv3::ReferenceOr::Item(boxed) => (Some(boxed), None),
@@ -790,10 +808,9 @@ fn expand_response_schema(
         None => return Vec::new(),
     };
 
-    let required = match &schema.schema_kind {
-        openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => obj.required.clone(),
-        _ => vec![],
-    };
+    let required = extract_object_properties(schema)
+        .map(|(_, req)| req)
+        .unwrap_or_default();
 
     let fields = build_fields(api, schema, &required);
     let mut visited = std::collections::HashSet::new();
@@ -973,12 +990,9 @@ fn extract_request_body(
             };
 
             if let Some(item_schema) = item_schema {
-                let required: Vec<String> =
-                    if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) = &item_schema.schema_kind {
-                        obj.required.clone()
-                    } else {
-                        vec![]
-                    };
+                let required: Vec<String> = extract_object_properties(item_schema)
+                    .map(|(_, req)| req)
+                    .unwrap_or_default();
 
                 let mut fields = build_fields(api, item_schema, &required);
 
@@ -1000,12 +1014,9 @@ fn extract_request_body(
         }
     }
 
-    let required: Vec<String> =
-        if let openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) = &schema.schema_kind {
-            obj.required.clone()
-        } else {
-            vec![]
-        };
+    let required: Vec<String> = extract_object_properties(schema)
+        .map(|(_, req)| req)
+        .unwrap_or_default();
 
     let mut fields = build_fields(api, schema, &required);
 
@@ -1888,5 +1899,63 @@ mod tests {
         assert_eq!(rb.content_type, "application/x-www-form-urlencoded");
         let field_names: Vec<&str> = rb.fields.iter().map(|f| f.name.as_str()).collect();
         assert!(field_names.contains(&"description"), "missing 'description': {:?}", field_names);
+    }
+
+    // ─── Bug fix: inline request body without explicit `type: object` ───
+
+    #[test]
+    fn test_implicit_object_request_body_extracted() {
+        // Schemas with `properties` but no `type: object` (common in GitLab, auto-generated
+        // specs) should still have their fields extracted — not show "Raw body (no schema)".
+        let yaml = r#"
+openapi: "3.0.0"
+info:
+  title: Test
+  version: "1.0"
+paths:
+  /messages:
+    post:
+      operationId: createMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              required:
+                - message
+              properties:
+                message:
+                  type: string
+                  description: Message to display
+                color:
+                  type: string
+                  description: Background color
+                active:
+                  type: boolean
+                  description: Whether the message is active
+      responses:
+        '201':
+          description: Created
+"#;
+        let api: openapiv3::OpenAPI = serde_yaml_ng::from_str(yaml).unwrap();
+        let ep = get_endpoint_detail(&api, "POST", "/messages", false, "phyllotaxis")
+            .expect("Expected POST /messages endpoint");
+        let body = ep
+            .request_body
+            .expect("Implicit object request body should be extracted");
+        assert_eq!(body.content_type, "application/json");
+        assert!(
+            !body.fields.is_empty(),
+            "Implicit object should have fields, got empty (was 'Raw body' bug)"
+        );
+        let field_names: Vec<&str> = body.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(field_names.contains(&"message"), "missing 'message': {:?}", field_names);
+        assert!(field_names.contains(&"color"), "missing 'color': {:?}", field_names);
+        assert!(field_names.contains(&"active"), "missing 'active': {:?}", field_names);
+        // Verify required flag
+        let msg_field = body.fields.iter().find(|f| f.name == "message").unwrap();
+        assert!(msg_field.required, "'message' should be required");
+        let color_field = body.fields.iter().find(|f| f.name == "color").unwrap();
+        assert!(!color_field.required, "'color' should be optional");
     }
 }

@@ -1,4 +1,4 @@
-use crate::commands::resources::build_fields;
+use crate::commands::resources::{build_fields, extract_object_properties};
 use crate::models::resource::Field;
 use crate::models::schema::{Composition, DiscriminatorInfo, SchemaModel};
 use crate::spec;
@@ -84,6 +84,11 @@ pub fn build_schema_model(
     let (fields, composition) = match &schema.schema_kind {
         openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => {
             let fields = build_fields(api, schema, &obj.required);
+            (fields, None)
+        }
+        // Implicit object: has properties but no `type: object` (parsed as AnySchema)
+        openapiv3::SchemaKind::Any(any) if !any.properties.is_empty() => {
+            let fields = build_fields(api, schema, &any.required);
             (fields, None)
         }
         openapiv3::SchemaKind::Type(openapiv3::Type::String(str_type))
@@ -225,12 +230,9 @@ fn expand_fields(
                     visited.insert(schema_name.clone());
 
                     if let Some((_, nested_schema)) = find_schema(api, schema_name) {
-                        let required = match &nested_schema.schema_kind {
-                            openapiv3::SchemaKind::Type(openapiv3::Type::Object(obj)) => {
-                                obj.required.clone()
-                            }
-                            _ => vec![],
-                        };
+                        let required = extract_object_properties(nested_schema)
+                            .map(|(_, req)| req)
+                            .unwrap_or_default();
                         let nested = build_fields(api, nested_schema, &required);
                         field.nested_fields =
                             expand_fields(api, nested, visited, depth + 1, max_depth);
