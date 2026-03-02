@@ -1,1 +1,13 @@
 /target
+
+# External API specs downloaded for manual testing (large files)
+tests/fixtures/github.yaml
+tests/fixtures/stripe.yaml
+tests/fixtures/slack.yaml
+tests/fixtures/gitlab.yaml
+tests/fixtures/digitalocean.*
+tests/fixtures/spotify.*
+tests/fixtures/twilio.yaml
+
+# Local config
+.phyllotaxis.yaml
