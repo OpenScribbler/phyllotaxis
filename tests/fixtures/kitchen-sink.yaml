@@ -449,6 +449,56 @@ paths:
                 items:
                   $ref: '#/components/schemas/Pet'
 
+  /users/paginated:
+    get:
+      tags: [Users]
+      operationId: listUsersPaginated
+      summary: List users with inline pagination wrapper
+      description: Returns users wrapped in a Stripe-style pagination object with inline schema.
+      responses:
+        '200':
+          description: A paginated list of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+                  has_more:
+                    type: boolean
+                  object:
+                    type: string
+                    enum: ["list"]
+                  url:
+                    type: string
+                required:
+                  - data
+                  - has_more
+                  - object
+                  - url
+
+  /users/summary:
+    get:
+      tags: [Users]
+      operationId: getUsersSummary
+      summary: Get users summary stats
+      description: Returns an inline object that is not a pagination wrapper.
+      responses:
+        '200':
+          description: Summary statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_count:
+                    type: integer
+                  active_count:
+                    type: integer
+
   # ──────────────────────────────────────────────
   # FILES — Binary, multipart, encoding
   # ──────────────────────────────────────────────
