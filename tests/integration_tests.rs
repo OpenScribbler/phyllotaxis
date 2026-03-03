@@ -1001,6 +1001,38 @@ fn test_overview_shows_callback_count() {
     );
 }
 
+// ─── Item 7: Enhanced Overview — top resources ───
+
+#[test]
+fn test_overview_shows_top_resources() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
+    let (stdout, _stderr, code) = run(&["--spec", &spec]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Top Resources"),
+        "Overview should show Top Resources section. Got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_overview_json_includes_top_resources() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
+    let (stdout, _stderr, code) = run(&["--spec", &spec, "--json"]);
+    assert_eq!(code, 0);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        json["top_resources"].is_array(),
+        "JSON overview should include top_resources array"
+    );
+    assert!(
+        !json["top_resources"].as_array().unwrap().is_empty(),
+        "top_resources should not be empty for kitchen-sink spec"
+    );
+}
+
 // Success criterion 11: No regressions on petstore
 #[test]
 fn test_petstore_regression() {
@@ -1010,4 +1042,122 @@ fn test_petstore_regression() {
         stdout.contains("Request Body"),
         "Regression: missing request body"
     );
+}
+
+// ─── Item 3: Always use phyll alias in drill-deeper ───
+
+#[test]
+fn test_drill_deeper_always_uses_phyll_alias() {
+    // Even when invoked as phyllotaxis, drill-deeper hints should say phyll.
+    // Use --json which always includes drill_deeper regardless of TTY.
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "resources", "pets"]);
+    assert_eq!(code, 0);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
+        panic!("Expected valid JSON. Got: {}", &stdout[..200.min(stdout.len())])
+    });
+    let drill_deeper = json["drill_deeper"].as_array().expect("drill_deeper should be array");
+    assert!(
+        !drill_deeper.is_empty(),
+        "drill_deeper should be non-empty for pets resource with endpoints"
+    );
+    // Every drill-deeper entry should start with phyll, not phyllotaxis
+    for entry in drill_deeper {
+        let s = entry.as_str().unwrap_or("");
+        assert!(
+            s.starts_with("phyll "),
+            "Drill deeper entry should start with 'phyll', got: {}",
+            s
+        );
+    }
+}
+
+#[test]
+fn test_overview_alias_tip_shown_when_invoked_as_phyllotaxis() {
+    let (stdout, _stderr, code) = run_with_petstore(&[]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("alias") || stdout.contains("phyll"),
+        "Overview should mention phyll alias when invoked as phyllotaxis. Got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_schema_list_drill_deeper_uses_phyll() {
+    // Use --json which always includes drill_deeper regardless of TTY
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "schemas"]);
+    assert_eq!(code, 0);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
+        panic!("Expected valid JSON. Got: {}", &stdout[..200.min(stdout.len())])
+    });
+    let drill_deeper = json["drill_deeper"].as_str().expect("drill_deeper should be a string");
+    assert!(
+        drill_deeper.starts_with("phyll "),
+        "Schema list drill_deeper should start with 'phyll'. Got: {}",
+        drill_deeper
+    );
+}
+
+// ─── Item 1: Better Error Messages for Endpoint Syntax ───
+
+#[test]
+fn test_error_method_path_as_single_arg() {
+    let (_, stderr, code) = run_with_petstore(&[
+        "resources", "pets", "GET /pets",
+    ]);
+    assert_ne!(code, 0, "Should fail when method+path passed as one arg");
+    assert!(
+        stderr.contains("separate arguments"),
+        "Error should say 'separate arguments'. Got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("resources pets GET /pets"),
+        "Error should show corrected command. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_error_method_path_as_single_arg_json() {
+    let (_, stderr, code) = run_with_petstore(&[
+        "--json", "resources", "pets", "GET /pets",
+    ]);
+    assert_ne!(code, 0);
+    // JSON mode: error still goes to stderr but as JSON
+    let json: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|_| {
+        panic!("Expected JSON on stderr. Got: {}", stderr)
+    });
+    assert!(json["error"].as_str().unwrap().contains("separate arguments"));
+}
+
+// ─── Item 5: --example flag ───
+
+#[test]
+fn test_schemas_example_flag() {
+    let (stdout, _stderr, code) = run_with_petstore(&["schemas", "Pet", "--example"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Example"),
+        "Should show example header. Got: {}",
+        stdout
+    );
+    // Pet has 'name' as required field
+    assert!(
+        stdout.contains("\"name\"") || stdout.contains("name"),
+        "Example should include Pet's name field. Got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_schemas_example_flag_json() {
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "schemas", "Pet", "--example"]);
+    assert_eq!(code, 0);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
+        panic!("Expected valid JSON. Got: {}", stdout)
+    });
+    assert_eq!(json["schema"], "Pet");
+    assert_eq!(json["source"], "auto-generated");
+    assert!(json["example"].is_object(), "Example should be a JSON object");
 }

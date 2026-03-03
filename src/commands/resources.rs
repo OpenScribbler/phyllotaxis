@@ -700,7 +700,7 @@ fn extract_links_from_response(
 fn build_link_drill_command(
     api: &openapiv3::OpenAPI,
     operation_id: &str,
-    bin_name: &str,
+    _bin_name: &str,
 ) -> Option<String> {
     for (path_str, path_item_ref) in &api.paths.paths {
         let path_item = match path_item_ref {
@@ -720,8 +720,8 @@ fn build_link_drill_command(
                     let slug = op.tags.first().map(|t| crate::models::resource::slugify(t));
                     if let Some(slug) = slug {
                         return Some(format!(
-                            "{} resources {} {} {}",
-                            bin_name, slug, method, path_str
+                            "phyll resources {} {} {}",
+                            slug, method, path_str
                         ));
                     }
                 }
@@ -1295,7 +1295,7 @@ pub fn get_endpoint_detail(
                 for variant in bare_name.split(" | ") {
                     // Skip generic "object" — no schema to drill into
                     if variant != "object" && seen.insert(variant.to_string()) {
-                        drill_deeper.push(format!("{} schemas {}", bin_name, variant));
+                        drill_deeper.push(format!("phyll schemas {}", variant));
                     }
                 }
             }
@@ -1307,12 +1307,12 @@ pub fn get_endpoint_detail(
         if !body.options.is_empty() {
             for name in &body.options {
                 if seen.insert(name.clone()) {
-                    drill_deeper.push(format!("{} schemas {}", bin_name, name));
+                    drill_deeper.push(format!("phyll schemas {}", name));
                 }
             }
         } else if let Some(ref name) = body.schema_ref {
             if seen.insert(name.clone()) {
-                drill_deeper.push(format!("{} schemas {}", bin_name, name));
+                drill_deeper.push(format!("phyll schemas {}", name));
             }
         }
     }
@@ -1391,6 +1391,252 @@ pub fn suggest_similar<'a>(groups: &'a [ResourceGroup], slug: &str) -> Vec<&'a s
         .map(|g| g.slug.as_str())
         .collect()
 }
+
+#[derive(Debug, serde::Serialize)]
+pub struct RelatedSchema {
+    pub name: String,
+    pub description: Option<String>,
+    pub fields: Vec<crate::models::resource::Field>,
+}
+
+/// Collect schemas that are nested *within* an endpoint's request body and 2xx response schemas.
+///
+/// Rather than collecting the top-level schema (which is already shown inline in the endpoint
+/// detail), this function walks one level into the schema's fields and collects any field types
+/// that reference named schemas. This surfaces genuinely useful context: for example, for
+/// `CreatePolicyDTO` it will show `PolicyCredentialMappingDTO` (from `credentialProviders` field)
+/// and `TagDTO` (from the `tags` field).
+///
+/// For oneOf/anyOf schemas (polymorphic request bodies/responses), the variant schemas are
+/// collected directly — up to the 5-schema cap — since those are what the user needs to see.
+///
+/// Returns at most 5 schemas, deduplicated by name.
+pub fn collect_related_schemas(
+    api: &openapiv3::OpenAPI,
+    method: &str,
+    path: &str,
+) -> Vec<RelatedSchema> {
+    use std::collections::HashSet;
+
+    let path_item = match resolve_path_item(api, path) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let operation = match resolve_operation(path_item, method) {
+        Some(o) => o,
+        None => return Vec::new(),
+    };
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut names: Vec<String> = Vec::new();
+
+    // Helper: given a schema_ref, collect nested schema names from it.
+    // - If the schema is a $ref, resolve it and collect its field $refs (one level deep).
+    // - If the schema is a oneOf/anyOf, collect the variant names directly.
+    // - If the schema is an inline object, collect field $refs directly.
+    let mut collect_nested = |schema_ref: &openapiv3::ReferenceOr<openapiv3::Schema>| {
+        collect_nested_schema_names(api, schema_ref, &mut seen, &mut names);
+    };
+
+    // Collect from request body
+    if let Some(openapiv3::ReferenceOr::Item(body)) = &operation.request_body {
+        for content in body.content.values() {
+            if let Some(schema_ref) = &content.schema {
+                collect_nested(schema_ref);
+            }
+        }
+    }
+
+    // Collect from 2xx responses
+    for (status, resp_ref) in &operation.responses.responses {
+        let is_2xx = matches!(status, openapiv3::StatusCode::Code(code) if *code >= 200 && *code < 300)
+            || matches!(status, openapiv3::StatusCode::Range(2));
+        if !is_2xx {
+            continue;
+        }
+        if let openapiv3::ReferenceOr::Item(resp) = resp_ref {
+            for content in resp.content.values() {
+                if let Some(schema_ref) = &content.schema {
+                    collect_nested(schema_ref);
+                }
+            }
+        }
+    }
+
+    // Resolve each name to a RelatedSchema, capped at 5
+    names
+        .into_iter()
+        .take(5)
+        .filter_map(|name| {
+            let (_, schema) = crate::commands::schemas::find_schema(api, &name)?;
+            let description = schema.schema_data.description.clone();
+            let required = extract_object_properties(schema)
+                .map(|(_, req)| req)
+                .unwrap_or_default();
+            let fields = build_fields(api, schema, &required);
+            Some(RelatedSchema {
+                name,
+                description,
+                fields,
+            })
+        })
+        .collect()
+}
+
+/// Walk a schema reference and collect the names of nested schemas it references.
+///
+/// For a direct $ref or inline object: collect the names of fields whose types are named schemas
+/// ($ref to components/schemas). This is one level of nesting — we don't recurse further.
+///
+/// For a oneOf/anyOf: collect the variant names directly, since those are the schemas that
+/// matter for a polymorphic endpoint (UX-1 fix: previously showed nothing).
+///
+/// For an array with $ref items: resolve the item schema and collect its field $refs.
+fn collect_nested_schema_names(
+    api: &openapiv3::OpenAPI,
+    schema_ref: &openapiv3::ReferenceOr<openapiv3::Schema>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    // Resolve the schema (follow $ref if needed)
+    let schema: &openapiv3::Schema = match schema_ref {
+        openapiv3::ReferenceOr::Reference { reference } => {
+            match crate::spec::schema_name_from_ref(reference).and_then(|sname| {
+                api.components
+                    .as_ref()
+                    .and_then(|c| c.schemas.get(sname))
+                    .and_then(|s| match s {
+                        openapiv3::ReferenceOr::Item(s) => Some(s as &openapiv3::Schema),
+                        _ => None,
+                    })
+            }) {
+                Some(s) => s,
+                None => return,
+            }
+        }
+        openapiv3::ReferenceOr::Item(s) => s,
+    };
+
+    match &schema.schema_kind {
+        // oneOf/anyOf: collect variant names directly (UX-1)
+        openapiv3::SchemaKind::OneOf { one_of } => {
+            for variant in one_of {
+                if let openapiv3::ReferenceOr::Reference { reference } = variant {
+                    if let Some(sname) = crate::spec::schema_name_from_ref(reference) {
+                        if seen.insert(sname.to_string()) {
+                            names.push(sname.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        openapiv3::SchemaKind::AnyOf { any_of } => {
+            for variant in any_of {
+                if let openapiv3::ReferenceOr::Reference { reference } = variant {
+                    if let Some(sname) = crate::spec::schema_name_from_ref(reference) {
+                        if seen.insert(sname.to_string()) {
+                            names.push(sname.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Array with $ref items: resolve the item schema and recurse into it
+        openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) => {
+            if let Some(openapiv3::ReferenceOr::Reference { reference }) = arr.items.as_ref() {
+                if let Some(item_schema) = crate::spec::schema_name_from_ref(reference)
+                    .and_then(|sname| {
+                        api.components
+                            .as_ref()
+                            .and_then(|c| c.schemas.get(sname))
+                            .and_then(|s| match s {
+                                openapiv3::ReferenceOr::Item(s) => Some(s as &openapiv3::Schema),
+                                _ => None,
+                            })
+                    })
+                {
+                    // The item schema itself may be oneOf/anyOf — recurse to handle that case
+                    let item_ref = openapiv3::ReferenceOr::Item(item_schema.clone());
+                    collect_nested_schema_names(api, &item_ref, seen, names);
+                }
+            }
+        }
+        // Object or allOf: collect field-level $refs
+        _ => {
+            collect_field_schema_refs(api, schema, seen, names);
+        }
+    }
+}
+
+/// Walk an object schema's properties and collect the names of any fields whose types are
+/// named schemas ($ref to #/components/schemas/...).
+///
+/// For allOf schemas, walks each constituent's properties as well.
+/// For array-typed fields with $ref items, collects the item schema name.
+fn collect_field_schema_refs(
+    api: &openapiv3::OpenAPI,
+    schema: &openapiv3::Schema,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    // For allOf: walk each constituent
+    if let openapiv3::SchemaKind::AllOf { all_of } = &schema.schema_kind {
+        for sub_ref in all_of {
+            let sub_schema: Option<&openapiv3::Schema> = match sub_ref {
+                openapiv3::ReferenceOr::Item(s) => Some(s),
+                openapiv3::ReferenceOr::Reference { reference } => {
+                    crate::spec::schema_name_from_ref(reference).and_then(|sname| {
+                        api.components
+                            .as_ref()
+                            .and_then(|c| c.schemas.get(sname))
+                            .and_then(|s| match s {
+                                openapiv3::ReferenceOr::Item(s) => Some(s as &openapiv3::Schema),
+                                _ => None,
+                            })
+                    })
+                }
+            };
+            if let Some(sub_schema) = sub_schema {
+                collect_field_schema_refs(api, sub_schema, seen, names);
+            }
+        }
+        return;
+    }
+
+    let properties = match extract_object_properties(schema) {
+        Some((props, _)) => props,
+        None => return,
+    };
+
+    for ref_or in properties.values() {
+        match ref_or {
+            openapiv3::ReferenceOr::Reference { reference } => {
+                if let Some(sname) = crate::spec::schema_name_from_ref(reference) {
+                    if seen.insert(sname.to_string()) {
+                        names.push(sname.to_string());
+                    }
+                }
+            }
+            openapiv3::ReferenceOr::Item(boxed) => {
+                // Check for array-of-ref fields: type: array, items: { $ref: ... }
+                if let openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) =
+                    &boxed.schema_kind
+                {
+                    if let Some(openapiv3::ReferenceOr::Reference { reference }) =
+                        arr.items.as_ref()
+                    {
+                        if let Some(sname) = crate::spec::schema_name_from_ref(reference) {
+                            if seen.insert(sname.to_string()) {
+                                names.push(sname.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1928,7 +2174,7 @@ mod tests {
         let ep = get_endpoint_detail(&api, "GET", "/pets/{id}", false, "phyllotaxis").unwrap();
         assert!(
             ep.drill_deeper
-                .contains(&"phyllotaxis schemas Pet".to_string()),
+                .contains(&"phyll schemas Pet".to_string()),
             "GET /pets/{{petId}} 200 response should yield drill_deeper for Pet, got: {:?}",
             ep.drill_deeper
         );
@@ -1941,7 +2187,7 @@ mod tests {
         // POST /pets has 201 → Pet, 400 → no schema, 409 → no schema
         assert!(
             ep.drill_deeper
-                .contains(&"phyllotaxis schemas Pet".to_string()),
+                .contains(&"phyll schemas Pet".to_string()),
             "Should include Pet from 201 response"
         );
         // Error responses should not contribute extra entries
@@ -2183,7 +2429,7 @@ mod tests {
         assert!(
             link.drill_command
                 .as_ref()
-                .map(|c| c.contains("phyllotaxis resources"))
+                .map(|c| c.contains("phyll resources"))
                 .unwrap_or(false),
             "Expected drill command, got: {:?}",
             link.drill_command
@@ -2439,13 +2685,13 @@ paths:
 
         assert!(
             ep.drill_deeper
-                .contains(&"phyllotaxis schemas User".to_string()),
+                .contains(&"phyll schemas User".to_string()),
             "Missing drill_deeper for User: {:?}",
             ep.drill_deeper
         );
         assert!(
             ep.drill_deeper
-                .contains(&"phyllotaxis schemas DeletedUser".to_string()),
+                .contains(&"phyll schemas DeletedUser".to_string()),
             "Missing drill_deeper for DeletedUser: {:?}",
             ep.drill_deeper
         );
@@ -2603,6 +2849,78 @@ paths:
         assert!(
             smtp.nested_fields.is_empty(),
             "Without expand, smtp_config should NOT have nested fields"
+        );
+    }
+
+    // ─── collect_related_schemas tests ───
+
+    #[test]
+    fn test_collect_related_schemas_oneof_request_body() {
+        let api = load_kitchen_sink();
+        // POST /pets: CreatePetRequest is oneOf [CreateDogRequest, CreateCatRequest, CreateBirdRequest]
+        // The new logic should collect variant names from the oneOf
+        let related = collect_related_schemas(&api, "POST", "/pets");
+        let names: Vec<&str> = related.iter().map(|r| r.name.as_str()).collect();
+        assert!(
+            names.contains(&"CreateDogRequest")
+                || names.contains(&"CreateCatRequest")
+                || names.contains(&"CreateBirdRequest"),
+            "oneOf request body should surface variant schemas: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_collect_related_schemas_oneof_response() {
+        let api = load_kitchen_sink();
+        // GET /pets: 200 response is array of Pet (oneOf Dog|Cat|Bird)
+        let related = collect_related_schemas(&api, "GET", "/pets");
+        let names: Vec<&str> = related.iter().map(|r| r.name.as_str()).collect();
+        assert!(
+            names.contains(&"Dog") || names.contains(&"Cat") || names.contains(&"Bird"),
+            "oneOf response should surface variant schemas: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_collect_related_schemas_deduplicates() {
+        let api = load_kitchen_sink();
+        // POST /pets: same variant won't appear twice even if referenced in both body and response
+        let related = collect_related_schemas(&api, "POST", "/pets");
+        let mut seen = std::collections::HashSet::new();
+        for r in &related {
+            assert!(
+                seen.insert(r.name.clone()),
+                "Schema '{}' appears more than once in related schemas",
+                r.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_collect_related_schemas_limit() {
+        let api = load_kitchen_sink();
+        // POST /pets: CreatePetRequest (3 variants) + Pet response (3 variants) = 6, capped at 5
+        let related = collect_related_schemas(&api, "POST", "/pets");
+        assert!(
+            related.len() <= 5,
+            "Related schemas should be capped at 5, got: {}",
+            related.len()
+        );
+    }
+
+    #[test]
+    fn test_collect_related_schemas_nested_field_refs() {
+        let api = load_petstore();
+        // POST /pets: request body is Pet, Pet has owner: Owner (a named schema $ref field)
+        // The new logic should collect Owner from the Pet schema's fields
+        let related = collect_related_schemas(&api, "POST", "/pets");
+        let names: Vec<&str> = related.iter().map(|r| r.name.as_str()).collect();
+        assert!(
+            names.contains(&"Owner"),
+            "Should collect Owner from Pet schema's owner field: {:?}",
+            names
         );
     }
 }

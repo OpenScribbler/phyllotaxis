@@ -11,12 +11,22 @@ pub struct CallbackMatch {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct SecuritySchemeMatch {
+    pub name: String,
+    pub scheme_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct SearchResults {
     pub term: String,
     pub resources: Vec<ResourceMatch>,
     pub endpoints: Vec<EndpointMatch>,
     pub schemas: Vec<SchemaMatch>,
     pub callbacks: Vec<CallbackMatch>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub security_schemes: Vec<SecuritySchemeMatch>,
     pub suggestions: Vec<String>,
 }
 
@@ -123,7 +133,31 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
                 }
                 let param_match = matched_param_name.is_some();
 
-                if path_match || summary_match || op_desc_match || param_match {
+                // Check response descriptions
+                let mut matched_response_desc = false;
+                for resp_ref in op.responses.responses.values() {
+                    if let openapiv3::ReferenceOr::Item(resp) = resp_ref {
+                        if resp.description.to_lowercase().contains(&term_lower) {
+                            matched_response_desc = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Check request body description
+                let matched_request_body_desc = op
+                    .request_body
+                    .as_ref()
+                    .and_then(|rb_ref| match rb_ref {
+                        openapiv3::ReferenceOr::Item(rb) => rb.description.as_deref(),
+                        openapiv3::ReferenceOr::Reference { .. } => None,
+                    })
+                    .map(|d| d.to_lowercase().contains(&term_lower))
+                    .unwrap_or(false);
+
+                if path_match || summary_match || op_desc_match || param_match
+                    || matched_response_desc || matched_request_body_desc
+                {
                     let resource_slug = op
                         .tags
                         .first()
@@ -131,11 +165,23 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
                         .or_else(|| path_prefix_group_name(path_str))
                         .unwrap_or_default();
 
-                    // Only annotate matched_on when the match came from a parameter
-                    // and was NOT also a path/summary/description match.
+                    // Annotate matched_on only for non-primary match sources
                     let matched_on =
-                        if param_match && !path_match && !summary_match && !op_desc_match {
+                        if param_match && !path_match && !summary_match && !op_desc_match
+                            && !matched_response_desc && !matched_request_body_desc {
                             matched_param_name.map(|n| format!("parameter: {}", n))
+                        } else if matched_response_desc
+                            && !path_match && !summary_match && !op_desc_match && !param_match
+                            && !matched_request_body_desc {
+                            Some("response description".to_string())
+                        } else if matched_request_body_desc
+                            && !path_match && !summary_match && !op_desc_match && !param_match
+                            && !matched_response_desc {
+                            Some("request body description".to_string())
+                        } else if op_desc_match
+                            && !path_match && !summary_match && !param_match
+                            && !matched_response_desc && !matched_request_body_desc {
+                            Some("description".to_string())
                         } else {
                             None
                         };
@@ -164,8 +210,19 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
             continue;
         }
 
-        // Field name match: look inside the schema's properties
+        // Check schema description
         if let Some((_, schema)) = crate::commands::schemas::find_schema(api, &name) {
+            if let Some(desc) = &schema.schema_data.description {
+                if desc.to_lowercase().contains(&term_lower) {
+                    schemas.push(SchemaMatch {
+                        name,
+                        matched_field: Some("(description)".into()),
+                    });
+                    continue;
+                }
+            }
+
+            // Field name match: look inside the schema's properties
             let field_match = if let Some((props, _)) = extract_object_properties(schema) {
                 props
                     .keys()
@@ -211,10 +268,65 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
         })
         .collect();
 
+    // Search security schemes (name and description)
+    let security_schemes: Vec<SecuritySchemeMatch> = api
+        .components
+        .as_ref()
+        .map(|c| {
+            c.security_schemes
+                .iter()
+                .filter_map(|(name, scheme_ref)| {
+                    let scheme = match scheme_ref {
+                        openapiv3::ReferenceOr::Item(s) => s,
+                        openapiv3::ReferenceOr::Reference { .. } => return None,
+                    };
+                    let description = match scheme {
+                        openapiv3::SecurityScheme::HTTP { description, .. } => description.clone(),
+                        openapiv3::SecurityScheme::APIKey { description, .. } => {
+                            description.clone()
+                        }
+                        openapiv3::SecurityScheme::OAuth2 { description, .. } => {
+                            description.clone()
+                        }
+                        openapiv3::SecurityScheme::OpenIDConnect { description, .. } => {
+                            description.clone()
+                        }
+                    };
+                    let scheme_type = match scheme {
+                        openapiv3::SecurityScheme::HTTP { scheme, .. } => {
+                            format!("http/{}", scheme)
+                        }
+                        openapiv3::SecurityScheme::APIKey { .. } => "apiKey".to_string(),
+                        openapiv3::SecurityScheme::OAuth2 { .. } => "oauth2".to_string(),
+                        openapiv3::SecurityScheme::OpenIDConnect { .. } => {
+                            "openIdConnect".to_string()
+                        }
+                    };
+                    let name_match = name.to_lowercase().contains(&term_lower);
+                    let desc_match = description
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&term_lower);
+                    if name_match || desc_match {
+                        Some(SecuritySchemeMatch {
+                            name: name.clone(),
+                            scheme_type,
+                            description,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let has_results = !resources.is_empty()
         || !endpoints.is_empty()
         || !schemas.is_empty()
-        || !callbacks.is_empty();
+        || !callbacks.is_empty()
+        || !security_schemes.is_empty();
 
     let suggestions = if has_results {
         Vec::new()
@@ -235,6 +347,7 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
         endpoints,
         schemas,
         callbacks,
+        security_schemes,
         suggestions,
     }
 }
@@ -444,6 +557,99 @@ mod tests {
         assert!(
             results.suggestions.is_empty(),
             "Suggestions should be empty when there are real results"
+        );
+    }
+
+    #[test]
+    fn test_search_finds_schema_description() {
+        let api = load_kitchen_sink_api();
+        // "geospatial" appears only in GeoLocation's description, not in its name or field names
+        let results = search(&api, "geospatial");
+        assert!(
+            !results.schemas.is_empty(),
+            "Search for 'geospatial' should find GeoLocation via schema description"
+        );
+        let geo_match = results.schemas.iter().find(|s| s.name == "GeoLocation");
+        assert!(
+            geo_match.is_some(),
+            "GeoLocation should match, got: {:?}",
+            results.schemas.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            geo_match.unwrap().matched_field.as_deref(),
+            Some("(description)"),
+            "Schema description match should set matched_field to '(description)'"
+        );
+    }
+
+    #[test]
+    fn test_search_finds_response_description() {
+        let api = load_kitchen_sink_api();
+        // "permanently removed" appears only in the DELETE /users/{id} 204 response description
+        let results = search(&api, "permanently removed");
+        assert!(
+            !results.endpoints.is_empty(),
+            "Search for 'permanently removed' should find endpoint via response description"
+        );
+        let delete_match = results
+            .endpoints
+            .iter()
+            .find(|e| e.path == "/users/{userId}" && e.method == "DELETE");
+        assert!(
+            delete_match.is_some(),
+            "Expected DELETE /users/{{userId}} in results, got: {:?}",
+            results
+                .endpoints
+                .iter()
+                .map(|e| (&e.method, &e.path))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            delete_match.unwrap().matched_on.as_deref(),
+            Some("response description"),
+            "matched_on should be 'response description'"
+        );
+    }
+
+    #[test]
+    fn test_search_finds_request_body_description() {
+        let api = load_kitchen_sink_api();
+        // "webhook endpoint" appears only in POST /notifications/subscriptions requestBody description
+        let results = search(&api, "webhook endpoint");
+        assert!(
+            !results.endpoints.is_empty(),
+            "Search for 'webhook endpoint' should find endpoint via request body description"
+        );
+        let post_match = results
+            .endpoints
+            .iter()
+            .find(|e| e.path == "/notifications/subscribe" && e.method == "POST");
+        assert!(
+            post_match.is_some(),
+            "Expected POST /notifications/subscribe in results, got: {:?}",
+            results
+                .endpoints
+                .iter()
+                .map(|e| (&e.method, &e.path))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            post_match.unwrap().matched_on.as_deref(),
+            Some("request body description"),
+            "matched_on should be 'request body description'"
+        );
+    }
+
+    #[test]
+    fn test_search_schema_description_does_not_shadow_name_match() {
+        let api = load_kitchen_sink_api();
+        // "GeoLocation" matches by name — matched_field should be None even though description also matches
+        let results = search(&api, "GeoLocation");
+        let geo_match = results.schemas.iter().find(|s| s.name == "GeoLocation");
+        assert!(geo_match.is_some(), "GeoLocation should match by name");
+        assert!(
+            geo_match.unwrap().matched_field.is_none(),
+            "Name-matched schema should not have matched_field set"
         );
     }
 }
