@@ -2,6 +2,9 @@
 
 <img src="assets/logo.svg" alt="Phyllotaxis" width="660">
 
+[![CI](https://github.com/OpenScribbler/phyllotaxis/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenScribbler/phyllotaxis/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 </div>
 
 A CLI that lets you explore OpenAPI specs one layer at a time instead of reading the whole thing. Start with an overview, pick a resource, drill into an endpoint, check a schema. You (or an LLM) only see what you actually need.
@@ -441,4 +444,4 @@ cargo build -r   # Release build
 
 ## License
 
-MIT
+Apache-2.0

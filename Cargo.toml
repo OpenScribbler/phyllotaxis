@@ -2,6 +2,12 @@
 name = "phyllotaxis"
 version = "0.2.0"
 edition = "2021"
+description = "Progressive disclosure CLI for OpenAPI specs — explore one layer at a time"
+license = "Apache-2.0"
+repository = "https://github.com/OpenScribbler/phyllotaxis"
+readme = "README.md"
+keywords = ["cli", "openapi", "api", "spec"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 human-panic = "2"
