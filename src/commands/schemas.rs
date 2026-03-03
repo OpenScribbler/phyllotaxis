@@ -91,6 +91,10 @@ pub fn build_schema_model(
             let fields = build_fields(api, schema, &any.required);
             (fields, None)
         }
+        // Implicit array with items containing anyOf/oneOf (e.g. Slack objs_user)
+        openapiv3::SchemaKind::Any(any) if any.items.is_some() => {
+            extract_items_composition(api, any.items.as_ref().unwrap())
+        }
         openapiv3::SchemaKind::Type(openapiv3::Type::String(str_type))
             if !str_type.enumeration.is_empty() =>
         {
@@ -125,6 +129,11 @@ pub fn build_schema_model(
             let fields = extract_composition_fields(api, any_of);
             (fields, Some(Composition::AnyOf(variants)))
         }
+        // Explicit array whose items contain anyOf/oneOf
+        openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) => match &arr.items {
+            Some(items_ref) => extract_items_composition(api, items_ref),
+            None => (Vec::new(), None),
+        },
         _ => (Vec::new(), None),
     };
 
@@ -180,6 +189,46 @@ pub fn build_schema_model(
         external_docs: None,
         base_type: base_type.map(|s| s.to_string()),
     })
+}
+
+/// Resolve array `items` and extract anyOf/oneOf composition from within.
+///
+/// Handles the pattern where a schema is an array whose items are an anyOf or oneOf
+/// composition (e.g. Slack's `objs_user`). Returns the merged fields and composition
+/// variant info. If items don't contain a composition, returns empty fields and no
+/// composition.
+fn extract_items_composition(
+    api: &openapiv3::OpenAPI,
+    items_ref: &openapiv3::ReferenceOr<Box<openapiv3::Schema>>,
+) -> (Vec<Field>, Option<Composition>) {
+    let items_schema: Option<&openapiv3::Schema> = match items_ref {
+        openapiv3::ReferenceOr::Item(schema) => Some(schema.as_ref()),
+        openapiv3::ReferenceOr::Reference { reference } => {
+            spec::schema_name_from_ref(reference.as_str()).and_then(|sname| {
+                api.components
+                    .as_ref()
+                    .and_then(|c| c.schemas.get(sname))
+                    .and_then(|s| match s {
+                        openapiv3::ReferenceOr::Item(s) => Some(s as &openapiv3::Schema),
+                        _ => None,
+                    })
+            })
+        }
+    };
+
+    match items_schema.map(|s| &s.schema_kind) {
+        Some(openapiv3::SchemaKind::AnyOf { any_of }) => {
+            let variants = extract_variant_names(any_of);
+            let fields = extract_composition_fields(api, any_of);
+            (fields, Some(Composition::AnyOf(variants)))
+        }
+        Some(openapiv3::SchemaKind::OneOf { one_of }) => {
+            let variants = extract_variant_names(one_of);
+            let fields = extract_composition_fields(api, one_of);
+            (fields, Some(Composition::OneOf(variants)))
+        }
+        _ => (Vec::new(), None),
+    }
 }
 
 /// Collect fields from anyOf/oneOf variant schemas.
@@ -728,5 +777,59 @@ mod tests {
             model.fields.is_empty(),
             "oneOf with inline primitives should have no fields"
         );
+    }
+
+    #[test]
+    fn test_array_items_anyof_has_fields() {
+        // TeamMember is `items: { anyOf: [...] }` with no explicit `type: array`.
+        // Parsed as AnySchema — should extract fields from the anyOf variants.
+        let api = load_kitchen_sink_api();
+        let model = build_schema_model(&api, "TeamMember", false, 5).unwrap();
+
+        assert!(
+            !model.fields.is_empty(),
+            "array with items.anyOf should have merged fields"
+        );
+
+        let field_names: Vec<&str> = model.fields.iter().map(|f| f.name.as_str()).collect();
+        // From variant 1 (regular member):
+        assert!(
+            field_names.contains(&"id"),
+            "Missing field 'id': {:?}",
+            field_names
+        );
+        assert!(
+            field_names.contains(&"name"),
+            "Missing field 'name': {:?}",
+            field_names
+        );
+        assert!(
+            field_names.contains(&"role"),
+            "Missing field 'role': {:?}",
+            field_names
+        );
+        // From variant 2 (external contributor):
+        assert!(
+            field_names.contains(&"email"),
+            "Missing field 'email': {:?}",
+            field_names
+        );
+        assert!(
+            field_names.contains(&"company"),
+            "Missing field 'company': {:?}",
+            field_names
+        );
+
+        match &model.composition {
+            Some(Composition::AnyOf(variants)) => {
+                assert_eq!(
+                    variants.len(),
+                    2,
+                    "Expected 2 variants, got: {:?}",
+                    variants
+                );
+            }
+            other => panic!("Expected AnyOf composition, got {:?}", other),
+        }
     }
 }

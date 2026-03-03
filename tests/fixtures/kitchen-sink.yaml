@@ -1312,6 +1312,35 @@ components:
             enum: [admin]
       description: Any role except admin
 
+    # ── ARRAY-OF-ANYOF PATTERN ──────────────────
+    # Tests the pattern where a schema is an array whose items are an anyOf
+    # composition — no explicit `type: array`, just `items: { anyOf: [...] }`.
+    # This mirrors Slack's objs_user / objs_conversation pattern.
+    TeamMember:
+      items:
+        anyOf:
+          - description: Regular team member
+            type: object
+            required: [id, name]
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+              role:
+                type: string
+          - description: External contributor
+            type: object
+            required: [id, email]
+            properties:
+              id:
+                type: integer
+              email:
+                type: string
+                format: email
+              company:
+                type: string
+
     # ── FILE MODELS ──────────────────────────────
     FileMetadata:
       type: object
