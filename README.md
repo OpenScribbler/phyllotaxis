@@ -3,6 +3,7 @@
 <img src="assets/logo.svg" alt="Phyllotaxis" width="660">
 
 [![CI](https://github.com/OpenScribbler/phyllotaxis/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenScribbler/phyllotaxis/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/phyllotaxis.svg)](https://crates.io/crates/phyllotaxis)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 </div>
@@ -18,6 +19,12 @@ A CLI that lets you explore OpenAPI specs one layer at a time instead of reading
 Outputs plain text or JSON. Also available as `phyll` (shorter alias, same binary).
 
 ## Install
+
+### cargo install
+
+```bash
+cargo install phyllotaxis
+```
 
 ### Download a binary (recommended)
 
