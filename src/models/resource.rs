@@ -43,6 +43,7 @@ pub enum ParameterLocation {
     Path,
     Query,
     Header,
+    Cookie,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

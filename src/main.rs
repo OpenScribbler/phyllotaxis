@@ -1,5 +1,6 @@
 use phyllotaxis::{commands, render, spec};
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -100,6 +101,17 @@ fn json_error_with_suggestions(msg: &str, suggestions: &[String]) -> String {
     }
 }
 
+/// Pre-formatted error that should be printed to stderr as-is (no wrapping).
+/// Used when the error has already been formatted (e.g., JSON with suggestions).
+#[derive(Debug)]
+struct PreformattedError(String);
+impl std::fmt::Display for PreformattedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for PreformattedError {}
+
 /// Extract the binary filename from argv[0], falling back to "phyllotaxis".
 fn detect_bin_name() -> String {
     std::env::args()
@@ -118,7 +130,9 @@ fn main() -> std::process::ExitCode {
     match run(cli) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            if json {
+            if e.downcast_ref::<PreformattedError>().is_some() {
+                eprintln!("{e:#}");
+            } else if json {
                 eprintln!("{}", json_error(&format!("{e:#}")));
             } else {
                 eprintln!("Error: {e:#}");
@@ -131,7 +145,7 @@ fn main() -> std::process::ExitCode {
 fn run(cli: Cli) -> anyhow::Result<()> {
     use std::io::IsTerminal;
 
-    let cwd = std::env::current_dir().expect("cannot determine current directory");
+    let cwd = std::env::current_dir().context("Cannot determine current directory")?;
     let bin_name = detect_bin_name();
 
     let is_tty = std::io::stdout().is_terminal()
@@ -151,15 +165,12 @@ fn run(cli: Cli) -> anyhow::Result<()> {
 
     // Init does not support --json; it's interactive and always writes to .phyllotaxis.yaml
     if let Some(Commands::Init { spec_path }) = &cli.command {
-        commands::init::run_init(&cwd, spec_path.as_deref());
+        commands::init::run_init(&cwd, spec_path.as_deref())?;
         return Ok(());
     }
 
-    let spec_flag = cli
-        .spec
-        .as_ref()
-        .map(|p| p.to_str().expect("spec path not valid UTF-8"));
-    let loaded = spec::load_spec(spec_flag, &cwd)?;
+    let spec_flag = cli.spec.as_ref().map(|p| p.to_string_lossy().to_string());
+    let loaded = spec::load_spec(spec_flag.as_deref(), &cwd)?;
 
     match &cli.command {
         None => {
@@ -205,15 +216,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                             "Method and path must be separate arguments.\n\n  You passed:  \"{}\"\n  Try instead: {}",
                             method_str, corrected
                         );
-                        // BUG-3 fix: use eprintln + process::exit for both modes so the error
-                        // is printed exactly once. anyhow::bail! propagates to the outer handler
-                        // which would also print, causing a double print.
                         if cli.json {
-                            eprintln!("{}", json_error(&msg));
-                        } else {
-                            eprintln!("Error: {}", msg);
+                            return Err(PreformattedError(json_error(&msg)).into());
                         }
-                        std::process::exit(1);
+                        anyhow::bail!("{}", msg);
                     }
 
                     // Original missing-path error
@@ -266,9 +272,17 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                                             false,
                                         ) {
                                             let output = if cli.json {
-                                                render::json::render_example(schema_name, &ex, is_tty)
+                                                render::json::render_example(
+                                                    schema_name,
+                                                    &ex,
+                                                    is_tty,
+                                                )
                                             } else {
-                                                render::text::render_example(schema_name, &ex, is_tty)
+                                                render::text::render_example(
+                                                    schema_name,
+                                                    &ex,
+                                                    is_tty,
+                                                )
                                             };
                                             println!("{}", output);
                                         }
@@ -300,25 +314,29 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                                     .iter()
                                     .map(|s| format!("{} resources {}", bin_name, s))
                                     .collect();
-                                eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
-                                std::process::exit(1);
-                            } else {
-                                let mut full_msg = msg;
-                                if !slugs.is_empty() {
-                                    full_msg.push_str("\nDid you mean:");
-                                    for s in &slugs {
-                                        full_msg
-                                            .push_str(&format!("\n  {} resources {}", bin_name, s));
-                                    }
-                                }
-                                anyhow::bail!("{}", full_msg);
+                                return Err(PreformattedError(json_error_with_suggestions(
+                                    &msg, &cmds,
+                                ))
+                                .into());
                             }
+                            let mut full_msg = msg;
+                            if !slugs.is_empty() {
+                                full_msg.push_str("\nDid you mean:");
+                                for s in &slugs {
+                                    full_msg.push_str(&format!("\n  {} resources {}", bin_name, s));
+                                }
+                            }
+                            anyhow::bail!("{}", full_msg);
                         }
                     }
                 }
             }
         },
-        Some(Commands::Schemas { name, used_by, example }) => match name {
+        Some(Commands::Schemas {
+            name,
+            used_by,
+            example,
+        }) => match name {
             None => {
                 let names = commands::schemas::list_schemas(&loaded.api);
                 let output = if cli.json {
@@ -334,33 +352,28 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     // Without this check, a nonexistent schema silently returns empty results.
                     if commands::schemas::find_schema(&loaded.api, schema_name).is_none() {
                         let msg = format!("Schema '{}' not found.", schema_name);
-                        let similar = commands::schemas::suggest_similar_schemas(
-                            &loaded.api,
-                            schema_name,
-                        );
+                        let similar =
+                            commands::schemas::suggest_similar_schemas(&loaded.api, schema_name);
                         if cli.json {
                             let cmds: Vec<String> = similar
                                 .iter()
                                 .map(|s| format!("{} schemas {}", bin_name, s))
                                 .collect();
-                            eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
-                            std::process::exit(1);
-                        } else {
-                            let mut full_msg = msg;
-                            if !similar.is_empty() {
-                                full_msg.push_str("\nDid you mean:");
-                                for s in &similar {
-                                    full_msg.push_str(&format!(
-                                        "\n  {} schemas {}",
-                                        bin_name, s
-                                    ));
-                                }
-                            }
-                            anyhow::bail!("{}", full_msg);
+                            return Err(PreformattedError(json_error_with_suggestions(
+                                &msg, &cmds,
+                            ))
+                            .into());
                         }
+                        let mut full_msg = msg;
+                        if !similar.is_empty() {
+                            full_msg.push_str("\nDid you mean:");
+                            for s in &similar {
+                                full_msg.push_str(&format!("\n  {} schemas {}", bin_name, s));
+                            }
+                        }
+                        anyhow::bail!("{}", full_msg);
                     }
-                    let usages =
-                        commands::schemas::find_schema_usage(&loaded.api, schema_name);
+                    let usages = commands::schemas::find_schema_usage(&loaded.api, schema_name);
                     let output = if cli.json {
                         render::json::render_schema_usage(schema_name, &usages, is_tty)
                     } else {
@@ -380,11 +393,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                         None => {
                             let msg = format!("Schema '{}' not found.", schema_name);
                             if cli.json {
-                                eprintln!("{}", json_error(&msg));
-                                std::process::exit(1);
-                            } else {
-                                anyhow::bail!("{}", msg);
+                                return Err(PreformattedError(json_error(&msg)).into());
                             }
+                            anyhow::bail!("{}", msg);
                         }
                     }
                 } else {
@@ -419,21 +430,19 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                                     .iter()
                                     .map(|s| format!("{} schemas {}", bin_name, s))
                                     .collect();
-                                eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
-                                std::process::exit(1);
-                            } else {
-                                let mut full_msg = msg;
-                                if !similar.is_empty() {
-                                    full_msg.push_str("\nDid you mean:");
-                                    for s in &similar {
-                                        full_msg.push_str(&format!(
-                                            "\n  {} schemas {}",
-                                            bin_name, s
-                                        ));
-                                    }
-                                }
-                                anyhow::bail!("{}", full_msg);
+                                return Err(PreformattedError(json_error_with_suggestions(
+                                    &msg, &cmds,
+                                ))
+                                .into());
                             }
+                            let mut full_msg = msg;
+                            if !similar.is_empty() {
+                                full_msg.push_str("\nDid you mean:");
+                                for s in &similar {
+                                    full_msg.push_str(&format!("\n  {} schemas {}", bin_name, s));
+                                }
+                            }
+                            anyhow::bail!("{}", full_msg);
                         }
                     }
                 }
@@ -497,18 +506,19 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                                 .iter()
                                 .map(|s| format!("{} callbacks {}", bin_name, s))
                                 .collect();
-                            eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
-                            std::process::exit(1);
-                        } else {
-                            let mut full_msg = msg;
-                            if !similar.is_empty() {
-                                full_msg.push_str("\nDid you mean:");
-                                for s in &similar {
-                                    full_msg.push_str(&format!("\n  {} callbacks {}", bin_name, s));
-                                }
-                            }
-                            anyhow::bail!("{}", full_msg);
+                            return Err(PreformattedError(json_error_with_suggestions(
+                                &msg, &cmds,
+                            ))
+                            .into());
                         }
+                        let mut full_msg = msg;
+                        if !similar.is_empty() {
+                            full_msg.push_str("\nDid you mean:");
+                            for s in &similar {
+                                full_msg.push_str(&format!("\n  {} callbacks {}", bin_name, s));
+                            }
+                        }
+                        anyhow::bail!("{}", full_msg);
                     }
                 },
             }

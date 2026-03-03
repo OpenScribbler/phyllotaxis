@@ -1,5 +1,5 @@
-use openapiv3::{ReferenceOr, Schema, SchemaKind, Type};
 use crate::spec;
+use openapiv3::{ReferenceOr, Schema, SchemaKind, Type};
 use std::collections::HashSet;
 
 /// Generate a JSON example object for a named schema.
@@ -37,8 +37,8 @@ pub fn generate_example(
                         if let Some(disc) = &parent.schema_data.discriminator {
                             // Find the key that maps to this schema name
                             let disc_value = disc.mapping.iter().find_map(|(key, ref_val)| {
-                                let mapped_name = spec::schema_name_from_ref(ref_val)
-                                    .unwrap_or(ref_val.as_str());
+                                let mapped_name =
+                                    spec::schema_name_from_ref(ref_val).unwrap_or(ref_val.as_str());
                                 if mapped_name == schema_name {
                                     Some(key.clone())
                                 } else {
@@ -138,38 +138,56 @@ fn generate_from_schema(
         SchemaKind::Type(Type::Number(_)) => serde_json::json!(0.0),
         SchemaKind::Type(Type::Boolean(_)) => serde_json::json!(true),
         SchemaKind::Type(Type::Array(arr)) => {
-            let item_val = arr.items.as_ref().map(|items_ref| match items_ref {
-                ReferenceOr::Reference { reference } => {
-                    if let Some(sname) = spec::schema_name_from_ref(reference) {
-                        if visited.contains(sname) {
-                            serde_json::Value::Null
+            let item_val = arr
+                .items
+                .as_ref()
+                .map(|items_ref| match items_ref {
+                    ReferenceOr::Reference { reference } => {
+                        if let Some(sname) = spec::schema_name_from_ref(reference) {
+                            if visited.contains(sname) {
+                                serde_json::Value::Null
+                            } else {
+                                visited.insert(sname.to_string());
+                                let val = api
+                                    .components
+                                    .as_ref()
+                                    .and_then(|c| c.schemas.get(sname))
+                                    .and_then(|s| match s {
+                                        ReferenceOr::Item(s) => Some(s as &Schema),
+                                        _ => None,
+                                    })
+                                    .map(|s| {
+                                        let req = extract_required(s);
+                                        generate_from_schema(
+                                            api,
+                                            s,
+                                            &req,
+                                            include_optional,
+                                            visited,
+                                            depth + 1,
+                                        )
+                                    })
+                                    .unwrap_or(serde_json::Value::Null);
+                                visited.remove(sname);
+                                val
+                            }
                         } else {
-                            visited.insert(sname.to_string());
-                            let val = api
-                                .components
-                                .as_ref()
-                                .and_then(|c| c.schemas.get(sname))
-                                .and_then(|s| match s {
-                                    ReferenceOr::Item(s) => Some(s as &Schema),
-                                    _ => None,
-                                })
-                                .map(|s| {
-                                    let req = extract_required(s);
-                                    generate_from_schema(api, s, &req, include_optional, visited, depth + 1)
-                                })
-                                .unwrap_or(serde_json::Value::Null);
-                            visited.remove(sname);
-                            val
+                            serde_json::Value::Null
                         }
-                    } else {
-                        serde_json::Value::Null
                     }
-                }
-                ReferenceOr::Item(item_schema) => {
-                    let req = extract_required(item_schema.as_ref());
-                    generate_from_schema(api, item_schema.as_ref(), &req, include_optional, visited, depth + 1)
-                }
-            }).unwrap_or(serde_json::Value::Null);
+                    ReferenceOr::Item(item_schema) => {
+                        let req = extract_required(item_schema.as_ref());
+                        generate_from_schema(
+                            api,
+                            item_schema.as_ref(),
+                            &req,
+                            include_optional,
+                            visited,
+                            depth + 1,
+                        )
+                    }
+                })
+                .unwrap_or(serde_json::Value::Null);
             serde_json::Value::Array(vec![item_val])
         }
         SchemaKind::AllOf { all_of } => {
@@ -177,8 +195,8 @@ fn generate_from_schema(
             let mut map = serde_json::Map::new();
             for member in all_of {
                 let member_schema = match member {
-                    ReferenceOr::Reference { reference } => {
-                        spec::schema_name_from_ref(reference).and_then(|sname| {
+                    ReferenceOr::Reference { reference } => spec::schema_name_from_ref(reference)
+                        .and_then(|sname| {
                             api.components
                                 .as_ref()
                                 .and_then(|c| c.schemas.get(sname))
@@ -186,13 +204,13 @@ fn generate_from_schema(
                                     ReferenceOr::Item(s) => Some(s as &Schema),
                                     _ => None,
                                 })
-                        })
-                    }
+                        }),
                     ReferenceOr::Item(s) => Some(s as &Schema),
                 };
                 if let Some(s) = member_schema {
                     let req = extract_required(s);
-                    let val = generate_from_schema(api, s, &req, include_optional, visited, depth + 1);
+                    let val =
+                        generate_from_schema(api, s, &req, include_optional, visited, depth + 1);
                     if let serde_json::Value::Object(fields) = val {
                         map.extend(fields);
                     }
@@ -279,7 +297,14 @@ fn resolve_field_ref(
         }
         ReferenceOr::Item(field_schema) => {
             let req = extract_required(field_schema);
-            generate_from_schema(api, field_schema, &req, include_optional, visited, depth + 1)
+            generate_from_schema(
+                api,
+                field_schema,
+                &req,
+                include_optional,
+                visited,
+                depth + 1,
+            )
         }
     }
 }
@@ -298,17 +323,15 @@ mod tests {
 
     fn load_petstore() -> openapiv3::OpenAPI {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let content = std::fs::read_to_string(
-            manifest_dir.join("tests/fixtures/petstore.yaml")
-        ).unwrap();
+        let content =
+            std::fs::read_to_string(manifest_dir.join("tests/fixtures/petstore.yaml")).unwrap();
         serde_yaml_ng::from_str(&content).unwrap()
     }
 
     fn load_kitchen_sink() -> openapiv3::OpenAPI {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let content = std::fs::read_to_string(
-            manifest_dir.join("tests/fixtures/kitchen-sink.yaml")
-        ).unwrap();
+        let content =
+            std::fs::read_to_string(manifest_dir.join("tests/fixtures/kitchen-sink.yaml")).unwrap();
         serde_yaml_ng::from_str(&content).unwrap()
     }
 
@@ -317,13 +340,28 @@ mod tests {
         let api = load_kitchen_sink();
         // CreateUserRequest has required: [username, email, password]
         let output = generate_example(&api, "CreateUserRequest", false);
-        assert!(output.is_some(), "Should generate example for CreateUserRequest");
+        assert!(
+            output.is_some(),
+            "Should generate example for CreateUserRequest"
+        );
         let obj = output.unwrap();
-        assert!(obj.get("username").is_some(), "Should include required 'username'");
-        assert!(obj.get("email").is_some(), "Should include required 'email'");
-        assert!(obj.get("password").is_some(), "Should include required 'password'");
+        assert!(
+            obj.get("username").is_some(),
+            "Should include required 'username'"
+        );
+        assert!(
+            obj.get("email").is_some(),
+            "Should include required 'email'"
+        );
+        assert!(
+            obj.get("password").is_some(),
+            "Should include required 'password'"
+        );
         // 'role' is optional (has default but not required) — should not appear when required-only
-        assert!(obj.get("role").is_none(), "Should not include optional 'role'");
+        assert!(
+            obj.get("role").is_none(),
+            "Should not include optional 'role'"
+        );
     }
 
     #[test]

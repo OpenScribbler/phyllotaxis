@@ -25,6 +25,7 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3"
+serial_test = "3"
 
 [profile.release]
 lto = true

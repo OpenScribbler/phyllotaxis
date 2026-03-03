@@ -1044,28 +1044,33 @@ fn test_petstore_regression() {
     );
 }
 
-// ─── Item 3: Always use phyll alias in drill-deeper ───
+// ─── Item 3: Drill-deeper uses detected binary name ───
 
 #[test]
-fn test_drill_deeper_always_uses_phyll_alias() {
-    // Even when invoked as phyllotaxis, drill-deeper hints should say phyll.
+fn test_drill_deeper_uses_binary_name() {
+    // Drill-deeper hints should use the detected binary name.
     // Use --json which always includes drill_deeper regardless of TTY.
     let (stdout, _stderr, code) = run_with_petstore(&["--json", "resources", "pets"]);
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
-        panic!("Expected valid JSON. Got: {}", &stdout[..200.min(stdout.len())])
+        panic!(
+            "Expected valid JSON. Got: {}",
+            &stdout[..200.min(stdout.len())]
+        )
     });
-    let drill_deeper = json["drill_deeper"].as_array().expect("drill_deeper should be array");
+    let drill_deeper = json["drill_deeper"]
+        .as_array()
+        .expect("drill_deeper should be array");
     assert!(
         !drill_deeper.is_empty(),
         "drill_deeper should be non-empty for pets resource with endpoints"
     );
-    // Every drill-deeper entry should start with phyll, not phyllotaxis
+    // Every drill-deeper entry should start with the binary name
     for entry in drill_deeper {
         let s = entry.as_str().unwrap_or("");
         assert!(
-            s.starts_with("phyll "),
-            "Drill deeper entry should start with 'phyll', got: {}",
+            s.starts_with("phyllotaxis ") || s.starts_with("phyll "),
+            "Drill deeper entry should start with binary name, got: {}",
             s
         );
     }
@@ -1088,12 +1093,17 @@ fn test_schema_list_drill_deeper_uses_phyll() {
     let (stdout, _stderr, code) = run_with_petstore(&["--json", "schemas"]);
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
-        panic!("Expected valid JSON. Got: {}", &stdout[..200.min(stdout.len())])
+        panic!(
+            "Expected valid JSON. Got: {}",
+            &stdout[..200.min(stdout.len())]
+        )
     });
-    let drill_deeper = json["drill_deeper"].as_str().expect("drill_deeper should be a string");
+    let drill_deeper = json["drill_deeper"]
+        .as_str()
+        .expect("drill_deeper should be a string");
     assert!(
-        drill_deeper.starts_with("phyll "),
-        "Schema list drill_deeper should start with 'phyll'. Got: {}",
+        drill_deeper.starts_with("phyllotaxis ") || drill_deeper.starts_with("phyll "),
+        "Schema list drill_deeper should start with binary name. Got: {}",
         drill_deeper
     );
 }
@@ -1102,9 +1112,7 @@ fn test_schema_list_drill_deeper_uses_phyll() {
 
 #[test]
 fn test_error_method_path_as_single_arg() {
-    let (_, stderr, code) = run_with_petstore(&[
-        "resources", "pets", "GET /pets",
-    ]);
+    let (_, stderr, code) = run_with_petstore(&["resources", "pets", "GET /pets"]);
     assert_ne!(code, 0, "Should fail when method+path passed as one arg");
     assert!(
         stderr.contains("separate arguments"),
@@ -1120,15 +1128,15 @@ fn test_error_method_path_as_single_arg() {
 
 #[test]
 fn test_error_method_path_as_single_arg_json() {
-    let (_, stderr, code) = run_with_petstore(&[
-        "--json", "resources", "pets", "GET /pets",
-    ]);
+    let (_, stderr, code) = run_with_petstore(&["--json", "resources", "pets", "GET /pets"]);
     assert_ne!(code, 0);
     // JSON mode: error still goes to stderr but as JSON
-    let json: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|_| {
-        panic!("Expected JSON on stderr. Got: {}", stderr)
-    });
-    assert!(json["error"].as_str().unwrap().contains("separate arguments"));
+    let json: serde_json::Value = serde_json::from_str(stderr.trim())
+        .unwrap_or_else(|_| panic!("Expected JSON on stderr. Got: {}", stderr));
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("separate arguments"));
 }
 
 // ─── Item 5: --example flag ───
@@ -1154,10 +1162,12 @@ fn test_schemas_example_flag() {
 fn test_schemas_example_flag_json() {
     let (stdout, _stderr, code) = run_with_petstore(&["--json", "schemas", "Pet", "--example"]);
     assert_eq!(code, 0);
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
-        panic!("Expected valid JSON. Got: {}", stdout)
-    });
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|_| panic!("Expected valid JSON. Got: {}", stdout));
     assert_eq!(json["schema"], "Pet");
     assert_eq!(json["source"], "auto-generated");
-    assert!(json["example"].is_object(), "Example should be a JSON object");
+    assert!(
+        json["example"].is_object(),
+        "Example should be a JSON object"
+    );
 }

@@ -193,6 +193,18 @@ pub fn load_spec(spec_flag: Option<&str>, start_dir: &Path) -> Result<LoadedSpec
     let config_result = load_config(start_dir);
     let spec_path = resolve_spec_path(spec_flag, &config_result, start_dir)?;
 
+    // Guard against accidentally huge spec files (100 MB limit)
+    let metadata = std::fs::metadata(&spec_path)
+        .with_context(|| format!("Failed to stat {}", spec_path.display()))?;
+    const MAX_SPEC_SIZE: u64 = 100 * 1024 * 1024;
+    if metadata.len() > MAX_SPEC_SIZE {
+        bail!(
+            "Spec file {} is too large ({:.1} MB, max 100 MB).",
+            spec_path.display(),
+            metadata.len() as f64 / (1024.0 * 1024.0)
+        );
+    }
+
     let content = std::fs::read_to_string(&spec_path)
         .with_context(|| format!("Failed to read {}", spec_path.display()))?;
 
@@ -240,9 +252,12 @@ fn auto_detect_spec(dir: &Path) -> Option<PathBuf> {
         if !matches!(ext, "yaml" | "yml" | "json") {
             continue;
         }
-        // Peek at first 200 bytes
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            let peek: String = content.chars().take(200).collect();
+        // Peek at first 200 bytes (bounded read — avoids loading multi-GB files)
+        if let Ok(mut file) = std::fs::File::open(&path) {
+            use std::io::Read;
+            let mut buf = [0u8; 200];
+            let n = file.read(&mut buf).unwrap_or(0);
+            let peek = String::from_utf8_lossy(&buf[..n]);
             if peek.contains("openapi:") || peek.contains("\"openapi\"") {
                 return Some(path);
             }
@@ -265,6 +280,7 @@ pub fn schema_name_from_ref(reference: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
 
     #[test]
@@ -526,6 +542,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resolve_uses_env_var_when_no_flag() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("env-spec.yaml");
@@ -544,6 +561,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resolve_flag_wins_over_env_var() {
         let tmp = tempfile::tempdir().unwrap();
         let flag_spec = tmp.path().join("flag-spec.yaml");
@@ -568,6 +586,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resolve_env_var_wins_over_config() {
         let tmp = tempfile::tempdir().unwrap();
         let config_spec = tmp.path().join("config-spec.yaml");
@@ -598,6 +617,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resolve_env_var_not_found_is_error() {
         let tmp = tempfile::tempdir().unwrap();
 
@@ -616,6 +636,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resolve_env_var_empty_falls_through() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("openapi.yaml");

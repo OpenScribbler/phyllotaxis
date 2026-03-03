@@ -59,12 +59,20 @@ pub fn suggest_similar_schemas(api: &openapiv3::OpenAPI, name: &str) -> Vec<Stri
     api.components
         .as_ref()
         .map(|c| {
-            c.schemas
+            let mut matches: Vec<_> = c
+                .schemas
                 .keys()
-                .filter(|k| strsim::jaro_winkler(&lower, &k.to_lowercase()) > 0.8)
-                .take(3)
-                .cloned()
-                .collect()
+                .filter_map(|k| {
+                    let score = strsim::jaro_winkler(&lower, &k.to_lowercase());
+                    if score > 0.8 {
+                        Some((k.clone(), score))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            matches.into_iter().take(3).map(|(k, _)| k).collect()
         })
         .unwrap_or_default()
 }
@@ -440,9 +448,7 @@ pub fn find_schema_usage(api: &openapiv3::OpenAPI, schema_name: &str) -> Vec<Sch
                         openapiv3::Parameter::Query { parameter_data, .. } => {
                             &parameter_data.format
                         }
-                        openapiv3::Parameter::Path { parameter_data, .. } => {
-                            &parameter_data.format
-                        }
+                        openapiv3::Parameter::Path { parameter_data, .. } => &parameter_data.format,
                         openapiv3::Parameter::Header { parameter_data, .. } => {
                             &parameter_data.format
                         }
@@ -547,8 +553,8 @@ fn schema_has_field_ref(
         for sub_ref in all_of {
             let sub_schema: Option<&openapiv3::Schema> = match sub_ref {
                 ReferenceOr::Item(s) => Some(s),
-                ReferenceOr::Reference { reference } => {
-                    spec::schema_name_from_ref(reference).and_then(|sname| {
+                ReferenceOr::Reference { reference } => spec::schema_name_from_ref(reference)
+                    .and_then(|sname| {
                         api.components
                             .as_ref()
                             .and_then(|c| c.schemas.get(sname))
@@ -556,8 +562,7 @@ fn schema_has_field_ref(
                                 ReferenceOr::Item(s) => Some(s as &openapiv3::Schema),
                                 _ => None,
                             })
-                    })
-                }
+                    }),
             };
             if let Some(sub_schema) = sub_schema {
                 if schema_has_field_ref(api, sub_schema, schema_name) {
@@ -1080,9 +1085,9 @@ mod tests {
         // CreateUserRequest is used as the request body for POST /users
         let usages = find_schema_usage(&api, "CreateUserRequest");
         assert!(!usages.is_empty(), "CreateUserRequest should have usages");
-        let post_users = usages.iter().find(|u| {
-            u.method == "POST" && u.path == "/users" && u.usage_type == "request body"
-        });
+        let post_users = usages
+            .iter()
+            .find(|u| u.method == "POST" && u.path == "/users" && u.usage_type == "request body");
         assert!(
             post_users.is_some(),
             "Expected POST /users request body usage, got: {:?}",
@@ -1117,8 +1122,10 @@ mod tests {
         // Pet is used in responses for GET /pets and GET /pets/{id}
         let usages = find_schema_usage(&api, "Pet");
         assert!(!usages.is_empty(), "Pet should have usages");
-        let response_usages: Vec<_> =
-            usages.iter().filter(|u| u.usage_type == "response").collect();
+        let response_usages: Vec<_> = usages
+            .iter()
+            .filter(|u| u.usage_type == "response")
+            .collect();
         assert!(
             !response_usages.is_empty(),
             "Pet should appear in at least one response"

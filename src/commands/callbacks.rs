@@ -141,11 +141,19 @@ pub fn find_callback(api: &openapiv3::OpenAPI, name: &str) -> Option<CallbackEnt
 
 pub fn suggest_similar_callbacks<'a>(all: &'a [CallbackEntry], name: &str) -> Vec<&'a str> {
     let name_lower = name.to_lowercase();
-    all.iter()
-        .filter(|cb| strsim::jaro_winkler(&name_lower, &cb.name.to_lowercase()) > 0.8)
-        .take(3)
-        .map(|cb| cb.name.as_str())
-        .collect()
+    let mut matches: Vec<_> = all
+        .iter()
+        .filter_map(|cb| {
+            let score = strsim::jaro_winkler(&name_lower, &cb.name.to_lowercase());
+            if score > 0.8 {
+                Some((cb.name.as_str(), score))
+            } else {
+                None
+            }
+        })
+        .collect();
+    matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    matches.into_iter().take(3).map(|(name, _)| name).collect()
 }
 
 #[cfg(test)]
