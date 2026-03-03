@@ -20,13 +20,19 @@ Outputs plain text or JSON. Also available as `phyll` (shorter alias, same binar
 
 ## Install
 
+### Homebrew (macOS, Linux)
+
+```bash
+brew install openscribbler/tap/phyllotaxis
+```
+
 ### cargo install
 
 ```bash
 cargo install phyllotaxis
 ```
 
-### Download a binary (recommended)
+### Download a binary
 
 Grab the latest release for your platform from [GitHub Releases](https://github.com/OpenScribbler/phyllotaxis/releases/latest).
 

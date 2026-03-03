@@ -155,3 +155,84 @@ jobs:
       - run: cargo publish --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  update-homebrew:
+    name: Update Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" \
+            --repo OpenScribbler/phyllotaxis \
+            --pattern checksums.txt
+
+      - name: Checkout tap
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: OpenScribbler/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}"
+
+          SHA_AARCH64_DARWIN=$(grep aarch64-apple-darwin checksums.txt | cut -d' ' -f1)
+          SHA_X86_64_DARWIN=$(grep x86_64-apple-darwin checksums.txt | cut -d' ' -f1)
+          SHA_AARCH64_LINUX=$(grep aarch64-unknown-linux checksums.txt | cut -d' ' -f1)
+          SHA_X86_64_LINUX=$(grep x86_64-unknown-linux checksums.txt | cut -d' ' -f1)
+
+          cat > Formula/phyllotaxis.rb << FORMULA
+          class Phyllotaxis < Formula
+            desc "Progressive disclosure CLI for OpenAPI specs"
+            homepage "https://github.com/OpenScribbler/phyllotaxis"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/OpenScribbler/phyllotaxis/releases/download/v#{version}/phyllotaxis-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_AARCH64_DARWIN}"
+              end
+              on_intel do
+                url "https://github.com/OpenScribbler/phyllotaxis/releases/download/v#{version}/phyllotaxis-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_X86_64_DARWIN}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/OpenScribbler/phyllotaxis/releases/download/v#{version}/phyllotaxis-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_AARCH64_LINUX}"
+              end
+              on_intel do
+                url "https://github.com/OpenScribbler/phyllotaxis/releases/download/v#{version}/phyllotaxis-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_X86_64_LINUX}"
+              end
+            end
+
+            def install
+              bin.install "phyllotaxis"
+              bin.install "phyll"
+            end
+
+            test do
+              assert_match "phyllotaxis", shell_output("#{bin}/phyllotaxis --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Formula/phyllotaxis.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/phyllotaxis.rb
+          git commit -m "Update phyllotaxis to ${GITHUB_REF_NAME}"
+          git push
