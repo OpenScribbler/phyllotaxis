@@ -9,6 +9,12 @@
 
 A CLI that lets you explore OpenAPI specs one layer at a time instead of reading the whole thing. Start with an overview, pick a resource, drill into an endpoint, check a schema. You (or an LLM) only see what you actually need.
 
+<div align="center">
+
+<img src="assets/demo.gif" alt="Phyllotaxis demo" width="800">
+
+</div>
+
 Outputs plain text or JSON. Also available as `phyll` (shorter alias, same binary).
 
 ## Install
@@ -210,6 +216,8 @@ Operations:
 
 ## Example Generation
 
+<img src="assets/demo-schemas.gif" alt="Schema exploration and example generation" width="800">
+
 Generate example JSON from any schema:
 
 ```bash
@@ -237,6 +245,8 @@ Placeholders are based on the field type and format:
 If the spec has `example` values on schemas or properties, those get used instead. For discriminated unions (oneOf with a discriminator), the `type` field gets set to the correct mapped value.
 
 ## Reverse Schema Lookup
+
+<img src="assets/demo-used-by.gif" alt="Reverse schema lookup" width="800">
 
 Find out which endpoints use a given schema:
 
@@ -298,6 +308,8 @@ Fields:
 ```
 
 ## Search
+
+<img src="assets/demo-search.gif" alt="Cross-type search" width="800">
 
 Search across resources, endpoints, schemas, security schemes, and callbacks:
 
@@ -432,6 +444,17 @@ phyllotaxis/
     ├── integration_tests.rs # End-to-end CLI tests
     └── lib_tests.rs         # Library API tests
 ```
+
+## Roadmap
+
+| Feature | Status |
+|---------|--------|
+| OpenAPI 3.1 support | Planned |
+| Swagger / OpenAPI 2.0 support | Planned |
+| External `$ref` resolution (multi-file specs) | Planned |
+| MCP server (LLM tool integration) | Planned |
+
+See [issues](https://github.com/OpenScribbler/phyllotaxis/issues) for what's being worked on now.
 
 ## Development
 
