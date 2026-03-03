@@ -4,7 +4,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "phyllotaxis", version, about = "Progressive disclosure for OpenAPI specs")]
+#[command(
+    name = "phyllotaxis",
+    version,
+    about = "Progressive disclosure for OpenAPI specs"
+)]
 struct Cli {
     /// Override spec file location
     #[arg(long, global = true)]
@@ -139,7 +143,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let spec_flag = cli.spec.as_ref().map(|p| p.to_str().expect("spec path not valid UTF-8"));
+    let spec_flag = cli
+        .spec
+        .as_ref()
+        .map(|p| p.to_str().expect("spec path not valid UTF-8"));
     let loaded = spec::load_spec(spec_flag, &cwd)?;
 
     match &cli.command {
@@ -170,14 +177,22 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     if !cli.json {
                         msg.push_str(&format!(
                             "\nUsage: {} resources {} {} <path>",
-                            bin_name, name, method_str.to_uppercase()
+                            bin_name,
+                            name,
+                            method_str.to_uppercase()
                         ));
                     }
                     anyhow::bail!("{}", msg);
                 }
                 if let (Some(method), Some(path)) = (method, path) {
                     // Level 3: endpoint detail
-                    match commands::resources::get_endpoint_detail(&loaded.api, method, path, cli.expand, &bin_name) {
+                    match commands::resources::get_endpoint_detail(
+                        &loaded.api,
+                        method,
+                        path,
+                        cli.expand,
+                        &bin_name,
+                    ) {
                         Some(ep) => {
                             let output = if cli.json {
                                 render::json::render_endpoint_detail(&ep, is_tty)
@@ -206,7 +221,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                             let groups = commands::resources::extract_resource_groups(&loaded.api);
                             let slugs = commands::resources::suggest_similar(&groups, name);
                             if cli.json {
-                                let cmds: Vec<String> = slugs.iter().map(|s| format!("{} resources {}", bin_name, s)).collect();
+                                let cmds: Vec<String> = slugs
+                                    .iter()
+                                    .map(|s| format!("{} resources {}", bin_name, s))
+                                    .collect();
                                 eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
                                 std::process::exit(1);
                             } else {
@@ -214,7 +232,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                                 if !slugs.is_empty() {
                                     full_msg.push_str("\nDid you mean:");
                                     for s in &slugs {
-                                        full_msg.push_str(&format!("\n  {} resources {}", bin_name, s));
+                                        full_msg
+                                            .push_str(&format!("\n  {} resources {}", bin_name, s));
                                     }
                                 }
                                 anyhow::bail!("{}", full_msg);
@@ -235,28 +254,31 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 println!("{}", output);
             }
             Some(schema_name) => {
-                match commands::schemas::build_schema_model(
-                    &loaded.api,
-                    schema_name,
-                    cli.expand,
-                    5,
-                ) {
+                match commands::schemas::build_schema_model(&loaded.api, schema_name, cli.expand, 5)
+                {
                     Some(model) => {
                         let output = if cli.json {
                             render::json::render_schema_detail(&model, &bin_name, is_tty)
                         } else {
-                            render::text::render_schema_detail(&model, &bin_name, cli.expand, cli.related_limit, is_tty)
+                            render::text::render_schema_detail(
+                                &model,
+                                &bin_name,
+                                cli.expand,
+                                cli.related_limit,
+                                is_tty,
+                            )
                         };
                         println!("{}", output);
                     }
                     None => {
                         let msg = format!("Schema '{}' not found.", schema_name);
-                        let similar = commands::schemas::suggest_similar_schemas(
-                            &loaded.api,
-                            schema_name,
-                        );
+                        let similar =
+                            commands::schemas::suggest_similar_schemas(&loaded.api, schema_name);
                         if cli.json {
-                            let cmds: Vec<String> = similar.iter().map(|s| format!("{} schemas {}", bin_name, s)).collect();
+                            let cmds: Vec<String> = similar
+                                .iter()
+                                .map(|s| format!("{} schemas {}", bin_name, s))
+                                .collect();
                             eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
                             std::process::exit(1);
                         } else {
@@ -313,36 +335,38 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     };
                     println!("{}", output);
                 }
-                Some(name) => {
-                    match commands::callbacks::find_callback(&loaded.api, name) {
-                        Some(cb) => {
-                            let output = if cli.json {
-                                render::json::render_callback_detail(&cb, &bin_name, is_tty)
-                            } else {
-                                render::text::render_callback_detail(&cb, &bin_name, is_tty)
-                            };
-                            println!("{}", output);
-                        }
-                        None => {
-                            let msg = format!("Callback '{}' not found.", name);
-                            let similar = commands::callbacks::suggest_similar_callbacks(&callbacks, name);
-                            if cli.json {
-                                let cmds: Vec<String> = similar.iter().map(|s| format!("{} callbacks {}", bin_name, s)).collect();
-                                eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
-                                std::process::exit(1);
-                            } else {
-                                let mut full_msg = msg;
-                                if !similar.is_empty() {
-                                    full_msg.push_str("\nDid you mean:");
-                                    for s in &similar {
-                                        full_msg.push_str(&format!("\n  {} callbacks {}", bin_name, s));
-                                    }
+                Some(name) => match commands::callbacks::find_callback(&loaded.api, name) {
+                    Some(cb) => {
+                        let output = if cli.json {
+                            render::json::render_callback_detail(&cb, &bin_name, is_tty)
+                        } else {
+                            render::text::render_callback_detail(&cb, &bin_name, is_tty)
+                        };
+                        println!("{}", output);
+                    }
+                    None => {
+                        let msg = format!("Callback '{}' not found.", name);
+                        let similar =
+                            commands::callbacks::suggest_similar_callbacks(&callbacks, name);
+                        if cli.json {
+                            let cmds: Vec<String> = similar
+                                .iter()
+                                .map(|s| format!("{} callbacks {}", bin_name, s))
+                                .collect();
+                            eprintln!("{}", json_error_with_suggestions(&msg, &cmds));
+                            std::process::exit(1);
+                        } else {
+                            let mut full_msg = msg;
+                            if !similar.is_empty() {
+                                full_msg.push_str("\nDid you mean:");
+                                for s in &similar {
+                                    full_msg.push_str(&format!("\n  {} callbacks {}", bin_name, s));
                                 }
-                                anyhow::bail!("{}", full_msg);
                             }
+                            anyhow::bail!("{}", full_msg);
                         }
                     }
-                }
+                },
             }
         }
         Some(Commands::Init { .. }) => unreachable!(),

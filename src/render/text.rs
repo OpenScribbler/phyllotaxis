@@ -101,7 +101,10 @@ fn strip_html(s: &str) -> String {
 /// Also strips HTML tags via `strip_html()` before control-char filtering.
 fn sanitize(s: &str) -> String {
     let s = strip_html(s);
-    if !s.bytes().any(|b| (b < 0x20 && !matches!(b, 0x09 | 0x0A | 0x0D)) || b == 0x7F) {
+    if !s
+        .bytes()
+        .any(|b| (b < 0x20 && !matches!(b, 0x09 | 0x0A | 0x0D)) || b == 0x7F)
+    {
         return s;
     }
     s.chars()
@@ -140,7 +143,15 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, _is_tty: bool) -> St
                 .as_ref()
                 .map(|d| format!("  default: {}", sanitize(d)))
                 .unwrap_or_default();
-            writeln!(out, "    {}  ({})  {}{}", sanitize(&var.name), req, desc, default).unwrap();
+            writeln!(
+                out,
+                "    {}  ({})  {}{}",
+                sanitize(&var.name),
+                req,
+                desc,
+                default
+            )
+            .unwrap();
         }
     }
 
@@ -156,31 +167,43 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, _is_tty: bool) -> St
             out,
             "  {} resources    List all resource groups ({} groups, {} endpoints)",
             bin_name, data.resource_count, data.endpoint_count
-        ).unwrap();
+        )
+        .unwrap();
     } else {
         writeln!(
             out,
             "  {} resources    List all endpoints ({} endpoints across {} paths)",
             bin_name, data.endpoint_count, data.path_count
-        ).unwrap();
+        )
+        .unwrap();
     }
     writeln!(
         out,
         "  {} schemas      List all data models ({} available)",
         bin_name, data.schema_count
-    ).unwrap();
+    )
+    .unwrap();
     writeln!(out, "  {} auth         Authentication details", bin_name).unwrap();
     writeln!(
         out,
         "  {} callbacks    List all webhook callbacks ({} available)",
         bin_name, data.callback_count
-    ).unwrap();
-    writeln!(out, "  {} search       Search across all endpoints and schemas", bin_name).unwrap();
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  {} search       Search across all endpoints and schemas",
+        bin_name
+    )
+    .unwrap();
 
     out
 }
 
-pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_tty: bool) -> String {
+pub fn render_endpoint_detail(
+    endpoint: &crate::models::resource::Endpoint,
+    is_tty: bool,
+) -> String {
     use crate::models::resource::ParameterLocation;
 
     let mut out = String::new();
@@ -193,7 +216,14 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
     } else {
         ""
     };
-    writeln!(out, "{} {}{}", sanitize(&endpoint.method), sanitize(&endpoint.path), marker).unwrap();
+    writeln!(
+        out,
+        "{} {}{}",
+        sanitize(&endpoint.method),
+        sanitize(&endpoint.path),
+        marker
+    )
+    .unwrap();
 
     if let Some(ref desc) = endpoint.description {
         writeln!(out, "{}", sanitize(desc)).unwrap();
@@ -201,7 +231,11 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
 
     // Auth
     if !endpoint.security_schemes.is_empty() {
-        let schemes: Vec<String> = endpoint.security_schemes.iter().map(|s| sanitize(s)).collect();
+        let schemes: Vec<String> = endpoint
+            .security_schemes
+            .iter()
+            .map(|s| sanitize(s))
+            .collect();
         writeln!(out, "\nAuthentication: {} (required)", schemes.join(", ")).unwrap();
     }
 
@@ -283,7 +317,14 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
                 .as_ref()
                 .map(|s| format!(" {} {}", arrow, sanitize(s)))
                 .unwrap_or_default();
-            writeln!(out, "  {} {}{}", sanitize(&resp.status_code), sanitize(&resp.description), schema).unwrap();
+            writeln!(
+                out,
+                "  {} {}{}",
+                sanitize(&resp.status_code),
+                sanitize(&resp.description),
+                schema
+            )
+            .unwrap();
 
             if let Some(ref example) = resp.example {
                 out.push_str("  Example:\n");
@@ -298,8 +339,21 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
                 out.push_str("    Headers:\n");
                 for h in &resp.headers {
                     match h.description.as_deref() {
-                        Some(desc) => writeln!(out, "      {}  {}  {}", sanitize(&h.name), sanitize(&h.type_display), sanitize(desc)).unwrap(),
-                        None => writeln!(out, "      {}  {}", sanitize(&h.name), sanitize(&h.type_display)).unwrap(),
+                        Some(desc) => writeln!(
+                            out,
+                            "      {}  {}  {}",
+                            sanitize(&h.name),
+                            sanitize(&h.type_display),
+                            sanitize(desc)
+                        )
+                        .unwrap(),
+                        None => writeln!(
+                            out,
+                            "      {}  {}",
+                            sanitize(&h.name),
+                            sanitize(&h.type_display)
+                        )
+                        .unwrap(),
                     }
                 }
             }
@@ -317,20 +371,38 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
             .as_ref()
             .map(|s| format!(" {} {}", arrow, sanitize(s)))
             .unwrap_or_default();
-        writeln!(out, "\nDefault Response:\n  {}{}", sanitize(&resp.description), schema).unwrap();
+        writeln!(
+            out,
+            "\nDefault Response:\n  {}{}",
+            sanitize(&resp.description),
+            schema
+        )
+        .unwrap();
     }
 
     if !errors.is_empty() {
         out.push_str("\nErrors:\n");
         for resp in &errors {
-            writeln!(out, "  {} {}", sanitize(&resp.status_code), sanitize(&resp.description)).unwrap();
+            writeln!(
+                out,
+                "  {} {}",
+                sanitize(&resp.status_code),
+                sanitize(&resp.description)
+            )
+            .unwrap();
         }
     }
 
     if !endpoint.links.is_empty() {
         out.push_str("\nLinks:\n");
         for link in &endpoint.links {
-            writeln!(out, "  {} -> {}", sanitize(&link.name), sanitize(&link.operation_id)).unwrap();
+            writeln!(
+                out,
+                "  {} -> {}",
+                sanitize(&link.name),
+                sanitize(&link.operation_id)
+            )
+            .unwrap();
             if let Some(ref desc) = link.description {
                 writeln!(out, "    {}", sanitize(desc)).unwrap();
             }
@@ -353,12 +425,15 @@ pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_t
                     sanitize(&cb.name),
                     sanitize(&op.method),
                     sanitize(&op.url_expression)
-                ).unwrap();
+                )
+                .unwrap();
                 if let Some(ref schema) = op.body_schema {
                     writeln!(out, "    Body: {}", sanitize(schema)).unwrap();
                 }
                 if !op.responses.is_empty() {
-                    let codes: Vec<String> = op.responses.iter()
+                    let codes: Vec<String> = op
+                        .responses
+                        .iter()
                         .map(|r| sanitize(&r.status_code))
                         .collect();
                     writeln!(out, "    Responses: {}", codes.join(", ")).unwrap();
@@ -405,7 +480,8 @@ fn render_param_section(
             desc,
             enums,
             width = max_name,
-        ).unwrap();
+        )
+        .unwrap();
     }
 }
 
@@ -414,13 +490,29 @@ fn compute_max_flag_width(fields: &[crate::models::resource::Field]) -> usize {
         .iter()
         .map(|f| {
             let mut flags = Vec::new();
-            if f.required { flags.push("required"); }
-            if f.optional { flags.push("optional"); }
-            if f.nullable { flags.push("nullable"); }
-            if f.read_only { flags.push("read-only"); }
-            if f.write_only { flags.push("write-only"); }
-            if f.deprecated { flags.push("DEPRECATED"); }
-            if flags.is_empty() { 0 } else { format!("({})", flags.join(", ")).len() }
+            if f.required {
+                flags.push("required");
+            }
+            if f.optional {
+                flags.push("optional");
+            }
+            if f.nullable {
+                flags.push("nullable");
+            }
+            if f.read_only {
+                flags.push("read-only");
+            }
+            if f.write_only {
+                flags.push("write-only");
+            }
+            if f.deprecated {
+                flags.push("DEPRECATED");
+            }
+            if flags.is_empty() {
+                0
+            } else {
+                format!("({})", flags.join(", ")).len()
+            }
         })
         .max()
         .unwrap_or(0)
@@ -431,7 +523,11 @@ fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Fi
         return;
     }
     let max_name = fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
-    let max_type = fields.iter().map(|f| f.type_display.len()).max().unwrap_or(0);
+    let max_type = fields
+        .iter()
+        .map(|f| f.type_display.len())
+        .max()
+        .unwrap_or(0);
     let max_flag = compute_max_flag_width(fields);
 
     for f in fields {
@@ -482,7 +578,8 @@ fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Fi
                 sanitize(&f.name),
                 sanitize(&f.type_display),
                 nw = max_name,
-            ).unwrap();
+            )
+            .unwrap();
             render_schema_fields(out, &f.nested_fields, 4);
             continue;
         }
@@ -499,7 +596,8 @@ fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Fi
             nw = max_name,
             tw = max_type,
             fw = max_flag,
-        ).unwrap();
+        )
+        .unwrap();
     }
 }
 
@@ -584,7 +682,8 @@ pub fn render_schema_detail(
                     "\nEnum values ({}):\n  [{}]",
                     sanitized.len(),
                     sanitized.join(", ")
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
     }
@@ -606,7 +705,8 @@ pub fn render_schema_detail(
                     bin_name,
                     sanitize(schema_name),
                     width = max_key
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
     }
@@ -659,10 +759,18 @@ pub fn render_schema_detail(
     out
 }
 
-fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Field], indent: usize) {
+fn render_schema_fields(
+    out: &mut String,
+    fields: &[crate::models::resource::Field],
+    indent: usize,
+) {
     let prefix = " ".repeat(indent);
     let max_name = fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
-    let max_type = fields.iter().map(|f| f.type_display.len()).max().unwrap_or(0);
+    let max_type = fields
+        .iter()
+        .map(|f| f.type_display.len())
+        .max()
+        .unwrap_or(0);
     let max_flag = compute_max_flag_width(fields);
 
     for f in fields {
@@ -715,7 +823,8 @@ fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Fie
                 sanitize(&f.name),
                 sanitize(&f.type_display),
                 nw = max_name,
-            ).unwrap();
+            )
+            .unwrap();
             render_schema_fields(out, &f.nested_fields, indent + 2);
         } else {
             writeln!(
@@ -731,12 +840,17 @@ fn render_schema_fields(out: &mut String, fields: &[crate::models::resource::Fie
                 nw = max_name,
                 tw = max_type,
                 fw = max_flag,
-            ).unwrap();
+            )
+            .unwrap();
         }
     }
 }
 
-pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry], bin_name: &str, is_tty: bool) -> String {
+pub fn render_callback_list(
+    callbacks: &[crate::models::resource::CallbackEntry],
+    bin_name: &str,
+    is_tty: bool,
+) -> String {
     let mut out = String::new();
     if callbacks.is_empty() {
         out.push_str("Callbacks: (none)\n");
@@ -745,7 +859,11 @@ pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry]
     writeln!(out, "Callbacks ({} total):", callbacks.len()).unwrap();
     for cb in callbacks {
         let op_count = cb.operations.len();
-        let op_label = if op_count == 1 { "operation" } else { "operations" };
+        let op_label = if op_count == 1 {
+            "operation"
+        } else {
+            "operations"
+        };
         writeln!(
             out,
             "  {} ({} {})  (on {} {})",
@@ -754,7 +872,8 @@ pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry]
             op_label,
             sanitize(&cb.defined_on_method),
             sanitize(&cb.defined_on_path)
-        ).unwrap();
+        )
+        .unwrap();
     }
     if is_tty {
         out.push_str("\nDrill deeper:\n");
@@ -763,7 +882,11 @@ pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry]
     out
 }
 
-pub fn render_callback_detail(cb: &crate::models::resource::CallbackEntry, bin_name: &str, is_tty: bool) -> String {
+pub fn render_callback_detail(
+    cb: &crate::models::resource::CallbackEntry,
+    bin_name: &str,
+    is_tty: bool,
+) -> String {
     let mut out = String::new();
     writeln!(out, "Callback: {}", sanitize(&cb.name)).unwrap();
     writeln!(
@@ -771,23 +894,38 @@ pub fn render_callback_detail(cb: &crate::models::resource::CallbackEntry, bin_n
         "Defined on: {} {}",
         sanitize(&cb.defined_on_method),
         sanitize(&cb.defined_on_path)
-    ).unwrap();
+    )
+    .unwrap();
 
     for op in &cb.operations {
-        writeln!(out, "\n  {} {}", sanitize(&op.method), sanitize(&op.url_expression)).unwrap();
+        writeln!(
+            out,
+            "\n  {} {}",
+            sanitize(&op.method),
+            sanitize(&op.url_expression)
+        )
+        .unwrap();
         if let Some(ref schema) = op.body_schema {
             writeln!(out, "    Body: {}", sanitize(schema)).unwrap();
         }
         if !op.responses.is_empty() {
             out.push_str("    Responses:\n");
             for r in &op.responses {
-                writeln!(out, "      {}  {}", sanitize(&r.status_code), sanitize(&r.description)).unwrap();
+                writeln!(
+                    out,
+                    "      {}  {}",
+                    sanitize(&r.status_code),
+                    sanitize(&r.description)
+                )
+                .unwrap();
             }
         }
     }
 
     if is_tty {
-        let schema_names: Vec<&str> = cb.operations.iter()
+        let schema_names: Vec<&str> = cb
+            .operations
+            .iter()
             .filter_map(|op| op.body_schema.as_deref())
             .filter(|s| *s != "inline object")
             .collect();
@@ -802,7 +940,12 @@ pub fn render_callback_detail(cb: &crate::models::resource::CallbackEntry, bin_n
     out
 }
 
-pub fn render_search(results: &crate::commands::search::SearchResults, bin_name: &str, limit: Option<usize>, is_tty: bool) -> String {
+pub fn render_search(
+    results: &crate::commands::search::SearchResults,
+    bin_name: &str,
+    limit: Option<usize>,
+    is_tty: bool,
+) -> String {
     let mut out = String::new();
 
     let has_any = !results.resources.is_empty()
@@ -857,7 +1000,14 @@ pub fn render_search(results: &crate::commands::search::SearchResults, bin_name:
         let max_slug = display.iter().map(|r| r.slug.len()).max().unwrap_or(0);
         for r in display {
             let desc = sanitize(r.description.as_deref().unwrap_or(""));
-            writeln!(out, "  {:<width$}  {}", sanitize(&r.slug), desc, width = max_slug).unwrap();
+            writeln!(
+                out,
+                "  {:<width$}  {}",
+                sanitize(&r.slug),
+                desc,
+                width = max_slug
+            )
+            .unwrap();
         }
     }
 
@@ -887,8 +1037,13 @@ pub fn render_search(results: &crate::commands::search::SearchResults, bin_name:
             writeln!(
                 out,
                 "  {:<7} {:<width$}  {}{}",
-                sanitize(&e.method), sanitize(&e.path), summary, reason, width = max_path
-            ).unwrap();
+                sanitize(&e.method),
+                sanitize(&e.path),
+                summary,
+                reason,
+                width = max_path
+            )
+            .unwrap();
             if !e.resource_slug.is_empty() {
                 writeln!(
                     out,
@@ -897,7 +1052,8 @@ pub fn render_search(results: &crate::commands::search::SearchResults, bin_name:
                     sanitize(&e.resource_slug),
                     sanitize(&e.method),
                     sanitize(&e.path),
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
     }
@@ -920,8 +1076,7 @@ pub fn render_search(results: &crate::commands::search::SearchResults, bin_name:
         for s in display {
             match s.matched_field.as_deref() {
                 Some(field) => {
-                    writeln!(out, "  {} (field: {})", sanitize(&s.name), sanitize(field))
-                        .unwrap()
+                    writeln!(out, "  {} (field: {})", sanitize(&s.name), sanitize(field)).unwrap()
                 }
                 None => writeln!(out, "  {}", sanitize(&s.name)).unwrap(),
             }
@@ -949,7 +1104,8 @@ pub fn render_search(results: &crate::commands::search::SearchResults, bin_name:
                 "  {}  (on {})",
                 sanitize(&cb.name),
                 sanitize(&cb.defined_on_path)
-            ).unwrap();
+            )
+            .unwrap();
             if is_tty {
                 writeln!(out, "    {} callbacks {}", bin_name, sanitize(&cb.name)).unwrap();
             }
@@ -976,7 +1132,11 @@ pub fn render_search(results: &crate::commands::search::SearchResults, bin_name:
     out
 }
 
-pub fn render_auth(model: &crate::commands::auth::AuthModel, bin_name: &str, is_tty: bool) -> String {
+pub fn render_auth(
+    model: &crate::commands::auth::AuthModel,
+    bin_name: &str,
+    is_tty: bool,
+) -> String {
     let mut out = String::new();
     out.push_str("Authentication:\n");
 
@@ -989,7 +1149,8 @@ pub fn render_auth(model: &crate::commands::auth::AuthModel, bin_name: &str, is_
                 "\n  {} ({})",
                 sanitize(&scheme.name),
                 sanitize(&scheme.scheme_type).to_uppercase()
-            ).unwrap();
+            )
+            .unwrap();
             writeln!(out, "    Scheme: {}", sanitize(&scheme.detail)).unwrap();
             if let Some(ref desc) = scheme.description {
                 writeln!(out, "    Description: {}", sanitize(desc)).unwrap();
@@ -1018,18 +1179,18 @@ pub fn render_auth(model: &crate::commands::auth::AuthModel, bin_name: &str, is_
                     }
                 }
             }
-            let qualifier = if model.total_operations > 0
-                && scheme.usage_count == model.total_operations
-            {
-                " (all endpoints)"
-            } else {
-                ""
-            };
+            let qualifier =
+                if model.total_operations > 0 && scheme.usage_count == model.total_operations {
+                    " (all endpoints)"
+                } else {
+                    ""
+                };
             writeln!(
                 out,
                 "\n    Used by: {} operation(s){}",
                 scheme.usage_count, qualifier
-            ).unwrap();
+            )
+            .unwrap();
         }
     }
 
@@ -1083,7 +1244,8 @@ pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: boo
             summary,
             marker,
             width = max_path,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     if is_tty {
@@ -1092,8 +1254,12 @@ pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: boo
             writeln!(
                 out,
                 "  {} resources {} {} {}",
-                bin_name, sanitize(&group.slug), sanitize(&ep.method), sanitize(&ep.path)
-            ).unwrap();
+                bin_name,
+                sanitize(&group.slug),
+                sanitize(&ep.method),
+                sanitize(&ep.path)
+            )
+            .unwrap();
         }
     }
 
@@ -1125,7 +1291,8 @@ pub fn render_resource_list(groups: &[ResourceGroup], bin_name: &str, is_tty: bo
             marker,
             desc,
             width = max_slug,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     if is_tty {
@@ -1165,7 +1332,10 @@ mod tests {
             output.contains("phyllotaxis schemas"),
             "Missing schemas command"
         );
-        assert!(output.contains("3 groups, 12 endpoints"), "Missing resource/endpoint count");
+        assert!(
+            output.contains("3 groups, 12 endpoints"),
+            "Missing resource/endpoint count"
+        );
         assert!(output.contains("Auth:"), "Missing auth line");
     }
 
@@ -1257,7 +1427,10 @@ mod tests {
             output.find("[DEPRECATED]").unwrap() > output.find("old-pets").unwrap(),
             "DEPRECATED marker should be on the old-pets line"
         );
-        assert!(output.contains("Drill deeper:"), "Missing drill deeper hint");
+        assert!(
+            output.contains("Drill deeper:"),
+            "Missing drill deeper hint"
+        );
         assert!(
             output.contains("phyllotaxis resources <name>"),
             "Missing drill command"
@@ -1330,11 +1503,17 @@ mod tests {
             "PetList".to_string(),
         ];
         let output = render_schema_list(&names, "phyllotaxis", true);
-        assert!(output.contains("Schemas (3 total):"), "Missing header with count");
+        assert!(
+            output.contains("Schemas (3 total):"),
+            "Missing header with count"
+        );
         assert!(output.contains("  Pet"), "Missing Pet in list");
         assert!(output.contains("  Owner"), "Missing Owner in list");
         assert!(output.contains("Drill deeper:"), "Missing drill deeper");
-        assert!(output.contains("phyllotaxis schemas <name>"), "Missing drill command");
+        assert!(
+            output.contains("phyllotaxis schemas <name>"),
+            "Missing drill command"
+        );
     }
 
     #[test]
@@ -1346,8 +1525,8 @@ mod tests {
 
     #[test]
     fn test_render_schema_detail_simple() {
-        use crate::models::schema::SchemaModel;
         use crate::models::resource::Field;
+        use crate::models::schema::SchemaModel;
 
         let model = SchemaModel {
             name: "Pet".to_string(),
@@ -1406,8 +1585,8 @@ mod tests {
 
     #[test]
     fn test_render_schema_detail_expanded() {
-        use crate::models::schema::SchemaModel;
         use crate::models::resource::Field;
+        use crate::models::schema::SchemaModel;
 
         let model = SchemaModel {
             name: "Pet".to_string(),
@@ -1446,25 +1625,23 @@ mod tests {
                     default_value: None,
                     example: None,
                     nested_schema_name: Some("Owner".to_string()),
-                    nested_fields: vec![
-                        Field {
-                            name: "id".to_string(),
-                            type_display: "string".to_string(),
-                            required: false,
-                            optional: false,
-                            nullable: false,
-                            read_only: true,
-                            write_only: false,
-                            deprecated: false,
-                            constraints: vec![],
-                            description: None,
-                            enum_values: vec![],
-                            default_value: None,
-                            example: None,
-                            nested_schema_name: None,
-                            nested_fields: vec![],
-                        },
-                    ],
+                    nested_fields: vec![Field {
+                        name: "id".to_string(),
+                        type_display: "string".to_string(),
+                        required: false,
+                        optional: false,
+                        nullable: false,
+                        read_only: true,
+                        write_only: false,
+                        deprecated: false,
+                        constraints: vec![],
+                        description: None,
+                        enum_values: vec![],
+                        default_value: None,
+                        example: None,
+                        nested_schema_name: None,
+                        nested_fields: vec![],
+                    }],
                 },
             ],
             composition: None,
@@ -1474,21 +1651,30 @@ mod tests {
         };
 
         let output = render_schema_detail(&model, "phyllotaxis", true, None, true);
-        assert!(output.contains("Schema: Pet (expanded)"), "Missing expanded label");
+        assert!(
+            output.contains("Schema: Pet (expanded)"),
+            "Missing expanded label"
+        );
         assert!(output.contains("Owner:"), "Missing nested schema colon");
-        assert!(!output.contains("Related schemas"), "Related schemas should be hidden when expanded");
+        assert!(
+            !output.contains("Related schemas"),
+            "Related schemas should be hidden when expanded"
+        );
     }
 
     #[test]
     fn test_render_schema_detail_oneof() {
-        use crate::models::schema::{SchemaModel, Composition};
+        use crate::models::schema::{Composition, SchemaModel};
 
         let model = SchemaModel {
             name: "PetOrOwner".to_string(),
             title: None,
             description: None,
             fields: vec![],
-            composition: Some(Composition::OneOf(vec!["Pet".to_string(), "Owner".to_string()])),
+            composition: Some(Composition::OneOf(vec![
+                "Pet".to_string(),
+                "Owner".to_string(),
+            ])),
             discriminator: None,
             external_docs: None,
             base_type: None,
@@ -1496,8 +1682,14 @@ mod tests {
 
         let output = render_schema_detail(&model, "phyllotaxis", false, None, true);
         assert!(output.contains("oneOf"), "Missing oneOf");
-        assert!(output.contains("phyllotaxis schemas Pet"), "Missing Pet variant");
-        assert!(output.contains("phyllotaxis schemas Owner"), "Missing Owner variant");
+        assert!(
+            output.contains("phyllotaxis schemas Pet"),
+            "Missing Pet variant"
+        );
+        assert!(
+            output.contains("phyllotaxis schemas Owner"),
+            "Missing Owner variant"
+        );
     }
 
     #[test]
@@ -1565,11 +1757,11 @@ mod tests {
 
         let output = render_endpoint_detail(&endpoint, true);
         assert!(output.contains("POST /pets"), "Missing method/path");
-        assert!(output.contains("Request Body"), "Missing request body section");
         assert!(
-            output.contains("Authentication:"),
-            "Missing authentication"
+            output.contains("Request Body"),
+            "Missing request body section"
         );
+        assert!(output.contains("Authentication:"), "Missing authentication");
         assert!(output.contains("Errors:"), "Missing errors section");
         assert!(output.contains("400"), "Missing 400 error");
         assert!(
@@ -1685,7 +1877,10 @@ mod tests {
         };
 
         let output = render_endpoint_detail(&endpoint, true);
-        assert!(output.contains("Drill deeper:"), "Missing drill deeper header");
+        assert!(
+            output.contains("Drill deeper:"),
+            "Missing drill deeper header"
+        );
         assert!(
             output.contains("phyllotaxis schemas Pet"),
             "Missing drill deeper command"
@@ -1861,7 +2056,11 @@ mod tests {
             base_type: None,
         };
         let output = render_schema_detail(&model, "phyllotaxis", false, None, false);
-        assert!(output.contains("write-only"), "Missing write-only flag, got:\n{}", output);
+        assert!(
+            output.contains("write-only"),
+            "Missing write-only flag, got:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -1896,7 +2095,11 @@ mod tests {
             base_type: None,
         };
         let output = render_schema_detail(&model, "phyllotaxis", false, None, false);
-        assert!(output.contains("DEPRECATED"), "Missing DEPRECATED flag, got:\n{}", output);
+        assert!(
+            output.contains("DEPRECATED"),
+            "Missing DEPRECATED flag, got:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -1919,7 +2122,11 @@ mod tests {
                 deprecated: false,
                 description: Some("Unique username".to_string()),
                 enum_values: vec![],
-                constraints: vec!["min:3".to_string(), "max:32".to_string(), "pattern:^[a-zA-Z0-9_-]+$".to_string()],
+                constraints: vec![
+                    "min:3".to_string(),
+                    "max:32".to_string(),
+                    "pattern:^[a-zA-Z0-9_-]+$".to_string(),
+                ],
                 default_value: None,
                 example: None,
                 nested_schema_name: None,
@@ -1932,8 +2139,16 @@ mod tests {
         };
         let output = render_schema_detail(&model, "phyllotaxis", false, None, false);
         assert!(output.contains("min:3"), "Missing min:3, got:\n{}", output);
-        assert!(output.contains("max:32"), "Missing max:32, got:\n{}", output);
-        assert!(output.contains("pattern:"), "Missing pattern, got:\n{}", output);
+        assert!(
+            output.contains("max:32"),
+            "Missing max:32, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pattern:"),
+            "Missing pattern, got:\n{}",
+            output
+        );
     }
 
     // ─── Task 16: Response headers rendering ───
@@ -1957,13 +2172,11 @@ mod tests {
                 description: "OK".to_string(),
                 schema_ref: None,
                 example: None,
-                headers: vec![
-                    ResponseHeader {
-                        name: "X-Total-Count".to_string(),
-                        type_display: "integer".to_string(),
-                        description: Some("Total count".to_string()),
-                    },
-                ],
+                headers: vec![ResponseHeader {
+                    name: "X-Total-Count".to_string(),
+                    type_display: "integer".to_string(),
+                    description: Some("Total count".to_string()),
+                }],
                 links: vec![],
                 fields: vec![],
             }],
@@ -1974,8 +2187,16 @@ mod tests {
         };
 
         let output = render_endpoint_detail(&endpoint, false);
-        assert!(output.contains("X-Total-Count"), "Missing header name, got:\n{}", output);
-        assert!(output.contains("integer"), "Missing header type, got:\n{}", output);
+        assert!(
+            output.contains("X-Total-Count"),
+            "Missing header name, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("integer"),
+            "Missing header type, got:\n{}",
+            output
+        );
     }
 
     // ─── Task 17: Links rendering ───
@@ -2005,7 +2226,9 @@ mod tests {
                     operation_id: "getUser".to_string(),
                     parameters: vec!["userId = $response.body#/id".to_string()],
                     description: None,
-                    drill_command: Some("phyllotaxis resources users GET /users/{userId}".to_string()),
+                    drill_command: Some(
+                        "phyllotaxis resources users GET /users/{userId}".to_string(),
+                    ),
                 }],
                 fields: vec![],
             }],
@@ -2022,10 +2245,26 @@ mod tests {
         };
 
         let output = render_endpoint_detail(&endpoint, false);
-        assert!(output.contains("Links:"), "Missing Links section, got:\n{}", output);
-        assert!(output.contains("GetCreatedUser"), "Missing link name, got:\n{}", output);
-        assert!(output.contains("getUser"), "Missing operationId, got:\n{}", output);
-        assert!(output.contains("userId = $response.body#/id"), "Missing parameter mapping, got:\n{}", output);
+        assert!(
+            output.contains("Links:"),
+            "Missing Links section, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("GetCreatedUser"),
+            "Missing link name, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("getUser"),
+            "Missing operationId, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("userId = $response.body#/id"),
+            "Missing parameter mapping, got:\n{}",
+            output
+        );
     }
 
     // ─── Task 18: Callbacks inline rendering ───
@@ -2056,9 +2295,10 @@ mod tests {
                     url_expression: "{$request.query.callbackUrl}/events".to_string(),
                     summary: Some("Event notification callback".to_string()),
                     body_schema: Some("EventPayload".to_string()),
-                    responses: vec![
-                        CallbackResponse { status_code: "200".to_string(), description: "Acknowledged".to_string() },
-                    ],
+                    responses: vec![CallbackResponse {
+                        status_code: "200".to_string(),
+                        description: "Acknowledged".to_string(),
+                    }],
                 }],
             }],
             links: vec![],
@@ -2066,10 +2306,26 @@ mod tests {
         };
 
         let output = render_endpoint_detail(&endpoint, false);
-        assert!(output.contains("Callbacks:"), "Missing Callbacks section, got:\n{}", output);
-        assert!(output.contains("onEvent"), "Missing callback name, got:\n{}", output);
-        assert!(output.contains("EventPayload"), "Missing body schema, got:\n{}", output);
-        assert!(output.contains("{$request.query.callbackUrl}/events"), "Missing URL expression, got:\n{}", output);
+        assert!(
+            output.contains("Callbacks:"),
+            "Missing Callbacks section, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("onEvent"),
+            "Missing callback name, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("EventPayload"),
+            "Missing body schema, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("{$request.query.callbackUrl}/events"),
+            "Missing URL expression, got:\n{}",
+            output
+        );
     }
 
     // ─── Task 19: Schema title rendering ───
@@ -2090,8 +2346,16 @@ mod tests {
         };
 
         let output = render_schema_detail(&model, "phyllotaxis", false, None, false);
-        assert!(output.contains("Schema: GeoLocation"), "Missing schema name, got:\n{}", output);
-        assert!(output.contains("Geographic Location"), "Missing title, got:\n{}", output);
+        assert!(
+            output.contains("Schema: GeoLocation"),
+            "Missing schema name, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("Geographic Location"),
+            "Missing title, got:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -2110,7 +2374,11 @@ mod tests {
         };
 
         let output = render_schema_detail(&model, "phyllotaxis", false, None, false);
-        assert!(!output.contains("Title:"), "Title should be hidden when same as name, got:\n{}", output);
+        assert!(
+            !output.contains("Title:"),
+            "Title should be hidden when same as name, got:\n{}",
+            output
+        );
     }
 
     // ─── Task 22: Callback list/detail rendering ───
@@ -2118,19 +2386,20 @@ mod tests {
     #[test]
     fn test_render_callback_list() {
         use crate::models::resource::*;
-        let callbacks = vec![
-            CallbackEntry {
-                name: "onEvent".to_string(),
-                defined_on_operation_id: Some("subscribeNotifications".to_string()),
-                defined_on_method: "POST".to_string(),
-                defined_on_path: "/notifications/subscribe".to_string(),
-                operations: vec![],
-            },
-        ];
+        let callbacks = vec![CallbackEntry {
+            name: "onEvent".to_string(),
+            defined_on_operation_id: Some("subscribeNotifications".to_string()),
+            defined_on_method: "POST".to_string(),
+            defined_on_path: "/notifications/subscribe".to_string(),
+            operations: vec![],
+        }];
         let output = render_callback_list(&callbacks, "phyllotaxis", true);
         assert!(output.contains("Callbacks"), "Missing header");
         assert!(output.contains("onEvent"), "Missing callback name");
-        assert!(output.contains("phyllotaxis callbacks <name>"), "Missing drill hint");
+        assert!(
+            output.contains("phyllotaxis callbacks <name>"),
+            "Missing drill hint"
+        );
     }
 
     #[test]
@@ -2146,15 +2415,32 @@ mod tests {
                 url_expression: "{$request.query.callbackUrl}/events".to_string(),
                 summary: None,
                 body_schema: Some("EventPayload".to_string()),
-                responses: vec![
-                    CallbackResponse { status_code: "200".to_string(), description: "OK".to_string() },
-                ],
+                responses: vec![CallbackResponse {
+                    status_code: "200".to_string(),
+                    description: "OK".to_string(),
+                }],
             }],
         };
         let output = render_callback_detail(&cb, "phyllotaxis", false);
-        assert!(output.contains("Callback: onEvent"), "Missing callback name, got:\n{}", output);
-        assert!(output.contains("POST /notifications/subscribe"), "Missing defined-on line, got:\n{}", output);
-        assert!(output.contains("EventPayload"), "Missing body schema, got:\n{}", output);
-        assert!(output.contains("200"), "Missing response code, got:\n{}", output);
+        assert!(
+            output.contains("Callback: onEvent"),
+            "Missing callback name, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("POST /notifications/subscribe"),
+            "Missing defined-on line, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("EventPayload"),
+            "Missing body schema, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("200"),
+            "Missing response code, got:\n{}",
+            output
+        );
     }
 }

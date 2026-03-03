@@ -56,8 +56,7 @@ pub fn write_init_config(config_path: &Path, spec_path: &str) -> std::io::Result
         spec: Some(spec_path.to_string()),
         ..Default::default()
     };
-    let content = serde_yaml_ng::to_string(&config)
-        .map_err(std::io::Error::other)?;
+    let content = serde_yaml_ng::to_string(&config).map_err(std::io::Error::other)?;
     atomic_write(config_path, &content)
 }
 
@@ -80,8 +79,7 @@ pub fn write_add_spec(config_path: &Path, name: &str, spec_path: &str) -> std::i
 
     config.specs.insert(name.to_string(), spec_path.to_string());
 
-    let content = serde_yaml_ng::to_string(&config)
-        .map_err(std::io::Error::other)?;
+    let content = serde_yaml_ng::to_string(&config).map_err(std::io::Error::other)?;
     atomic_write(config_path, &content)
 }
 
@@ -213,10 +211,7 @@ pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) {
     } else {
         eprintln!("Found spec candidates:");
         for (i, path) in candidates.iter().enumerate() {
-            let display = path
-                .strip_prefix(start_dir)
-                .unwrap_or(path)
-                .display();
+            let display = path.strip_prefix(start_dir).unwrap_or(path).display();
             eprintln!("  {}. ./{}", i + 1, display);
         }
         eprint!("Select a spec file (enter number) or type a path: ");
@@ -332,8 +327,8 @@ mod tests {
         // The injected key must NOT appear as a parsed top-level YAML key.
         // serde_yaml_ng uses block scalars (|-) to safely encode multi-line strings,
         // so the text may appear in the file but must be contained within the scalar value.
-        let parsed: PhyllotaxisConfig = serde_yaml_ng::from_str(&written)
-            .expect("Config file must be valid YAML");
+        let parsed: PhyllotaxisConfig =
+            serde_yaml_ng::from_str(&written).expect("Config file must be valid YAML");
 
         // No top-level key called "injected_key" — the only key should be "spec"
         let top_level: serde_yaml_ng::Value = serde_yaml_ng::from_str(&written).unwrap();
@@ -379,8 +374,8 @@ mod tests {
         let written = fs::read_to_string(&config_path).unwrap();
 
         // The injected_key must not be a real parsed key in the document
-        let top_level: serde_yaml_ng::Value = serde_yaml_ng::from_str(&written)
-            .expect("Config must be valid YAML");
+        let top_level: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&written).expect("Config must be valid YAML");
         assert!(
             top_level.get("injected_key").is_none(),
             "YAML injection via spec path — injected_key is a top-level key in:\n{}",
@@ -409,8 +404,8 @@ mod tests {
         let written = fs::read_to_string(&config_path).unwrap();
 
         // The injected_key must not appear as a parsed key at any level
-        let top_level: serde_yaml_ng::Value = serde_yaml_ng::from_str(&written)
-            .expect("Config must be valid YAML");
+        let top_level: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&written).expect("Config must be valid YAML");
         assert!(
             top_level.get("injected_key").is_none(),
             "YAML injection via spec name — injected_key is a top-level key in:\n{}",
@@ -438,10 +433,22 @@ mod tests {
         let written = fs::read_to_string(&config_path).unwrap();
         let parsed: PhyllotaxisConfig = serde_yaml_ng::from_str(&written).unwrap();
 
-        assert!(parsed.specs.contains_key("default"), "Original spec should be migrated to 'default'");
-        assert_eq!(parsed.specs.get("default").map(String::as_str), Some("./openapi.yaml"));
-        assert!(parsed.specs.contains_key("v2"), "New spec 'v2' should be present");
-        assert_eq!(parsed.specs.get("v2").map(String::as_str), Some("./openapi-v2.yaml"));
+        assert!(
+            parsed.specs.contains_key("default"),
+            "Original spec should be migrated to 'default'"
+        );
+        assert_eq!(
+            parsed.specs.get("default").map(String::as_str),
+            Some("./openapi.yaml")
+        );
+        assert!(
+            parsed.specs.contains_key("v2"),
+            "New spec 'v2' should be present"
+        );
+        assert_eq!(
+            parsed.specs.get("v2").map(String::as_str),
+            Some("./openapi-v2.yaml")
+        );
     }
 
     // ─── Task 3.5: Atomic write tests ───
@@ -454,7 +461,10 @@ mod tests {
         write_init_config(&config_path, "./openapi.yaml").unwrap();
 
         // The real config file must exist
-        assert!(config_path.exists(), ".phyllotaxis.yaml should exist after successful write");
+        assert!(
+            config_path.exists(),
+            ".phyllotaxis.yaml should exist after successful write"
+        );
 
         // No leftover tmp file
         let tmp_path = config_path.with_extension("yaml.tmp");
@@ -473,6 +483,10 @@ mod tests {
 
         let written = fs::read_to_string(&config_path).unwrap();
         let result: Result<PhyllotaxisConfig, _> = serde_yaml_ng::from_str(&written);
-        assert!(result.is_ok(), "Config written by init should be valid YAML: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Config written by init should be valid YAML: {:?}",
+            result
+        );
     }
 }

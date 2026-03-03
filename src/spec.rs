@@ -64,7 +64,11 @@ pub fn resolve_spec_path(
         } else {
             config_dir.join(name)
         };
-        if resolved.is_file() { Some(resolved) } else { None }
+        if resolved.is_file() {
+            Some(resolved)
+        } else {
+            None
+        }
     };
 
     // 1 & 2. --spec flag
@@ -168,7 +172,11 @@ pub fn resolve_spec_path(
          2. .phyllotaxis.yaml config ({})\n\
          3. Auto-detect in {} (no openapi files found)\n\n\
          Run 'phyllotaxis init' to set up, or use --spec <path>.",
-        if config.is_some() { "found, no spec configured" } else { "not found" },
+        if config.is_some() {
+            "found, no spec configured"
+        } else {
+            "not found"
+        },
         start_dir.display(),
     )
 }
@@ -193,17 +201,21 @@ pub fn load_spec(spec_flag: Option<&str>, start_dir: &Path) -> Result<LoadedSpec
         .or_else(|_| serde_json::from_str(&content))
         .with_context(|| format!("Failed to parse {}", spec_path.display()))?;
 
-    let config = config_result
-        .map(|(c, _)| c)
-        .unwrap_or_default();
+    let config = config_result.map(|(c, _)| c).unwrap_or_default();
 
     Ok(LoadedSpec { api, config })
 }
 
 /// Search for OpenAPI spec files by peeking at file contents.
 fn auto_detect_spec(dir: &Path) -> Option<PathBuf> {
-    let candidates = ["openapi.yaml", "openapi.yml", "openapi.json",
-                      "swagger.yaml", "swagger.yml", "swagger.json"];
+    let candidates = [
+        "openapi.yaml",
+        "openapi.yml",
+        "openapi.json",
+        "swagger.yaml",
+        "swagger.yml",
+        "swagger.json",
+    ];
 
     // Check common names first
     for name in &candidates {
@@ -250,7 +262,6 @@ pub fn schema_name_from_ref(reference: &str) -> Option<&str> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,20 +306,21 @@ mod tests {
     fn test_resolve_prefers_flag() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("my-spec.yaml");
-        fs::write(&spec_path, "openapi: \"3.0.0\"\ninfo:\n  title: Test\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &spec_path,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Test\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
 
         // Also write a config pointing to a different file
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
             "spec: ./other-spec.yaml\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = load_config(tmp.path());
-        let result = resolve_spec_path(
-            Some(spec_path.to_str().unwrap()),
-            &config,
-            tmp.path(),
-        );
+        let result = resolve_spec_path(Some(spec_path.to_str().unwrap()), &config, tmp.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), spec_path);
     }
@@ -317,11 +329,16 @@ mod tests {
     fn test_resolve_uses_config() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("openapi.yaml");
-        fs::write(&spec_path, "openapi: \"3.0.0\"\ninfo:\n  title: Test\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &spec_path,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Test\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
             "spec: ./openapi.yaml\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = load_config(tmp.path());
         let result = resolve_spec_path(None, &config, tmp.path());
@@ -333,7 +350,11 @@ mod tests {
     fn test_resolve_autodetect() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("openapi.yaml");
-        fs::write(&spec_path, "openapi: \"3.0.0\"\ninfo:\n  title: Test\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &spec_path,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Test\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
 
         let result = resolve_spec_path(None, &None, tmp.path());
         assert!(result.is_ok());
@@ -382,10 +403,7 @@ mod tests {
         let bad_path = tmp.path().join("bad.yaml");
         fs::write(&bad_path, "this is not valid openapi yaml {{{").unwrap();
 
-        let result = load_spec(
-            Some(bad_path.to_str().unwrap()),
-            tmp.path(),
-        );
+        let result = load_spec(Some(bad_path.to_str().unwrap()), tmp.path());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Failed to parse"), "Error: {}", err);
@@ -393,8 +411,14 @@ mod tests {
 
     #[test]
     fn test_schema_name_from_ref() {
-        assert_eq!(schema_name_from_ref("#/components/schemas/Pet"), Some("Pet"));
-        assert_eq!(schema_name_from_ref("#/components/schemas/PetList"), Some("PetList"));
+        assert_eq!(
+            schema_name_from_ref("#/components/schemas/Pet"),
+            Some("Pet")
+        );
+        assert_eq!(
+            schema_name_from_ref("#/components/schemas/PetList"),
+            Some("PetList")
+        );
     }
 
     #[test]
@@ -408,11 +432,16 @@ mod tests {
     fn test_resolve_named_spec_by_name() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("public.yaml");
-        fs::write(&spec_path, "openapi: \"3.0.0\"\ninfo:\n  title: Public\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &spec_path,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Public\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
             "specs:\n  public: ./public.yaml\ndefault: public\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = load_config(tmp.path());
         let result = resolve_spec_path(Some("public"), &config, tmp.path());
@@ -424,11 +453,16 @@ mod tests {
     fn test_resolve_uses_default_from_specs() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("public.yaml");
-        fs::write(&spec_path, "openapi: \"3.0.0\"\ninfo:\n  title: Public\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &spec_path,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Public\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
             "specs:\n  public: ./public.yaml\ndefault: public\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = load_config(tmp.path());
         // No --spec flag: should use default
@@ -442,32 +476,52 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let spec_a = tmp.path().join("a.yaml");
         let spec_b = tmp.path().join("b.yaml");
-        fs::write(&spec_a, "openapi: \"3.0.0\"\ninfo:\n  title: A\n  version: \"1.0\"\npaths: {}\n").unwrap();
-        fs::write(&spec_b, "openapi: \"3.0.0\"\ninfo:\n  title: B\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &spec_a,
+            "openapi: \"3.0.0\"\ninfo:\n  title: A\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
+        fs::write(
+            &spec_b,
+            "openapi: \"3.0.0\"\ninfo:\n  title: B\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
             "specs:\n  a: ./a.yaml\n  b: ./b.yaml\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = load_config(tmp.path());
         let result = resolve_spec_path(None, &config, tmp.path());
-        assert!(result.is_err(), "Should error when multiple specs and no default");
-        assert!(result.unwrap_err().to_string().contains("--spec"), "Error should mention --spec");
+        assert!(
+            result.is_err(),
+            "Should error when multiple specs and no default"
+        );
+        assert!(
+            result.unwrap_err().to_string().contains("--spec"),
+            "Error should mention --spec"
+        );
     }
 
     #[test]
     fn test_backward_compat_single_spec_field() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("api.yaml");
-        fs::write(&spec_path, "openapi: \"3.0.0\"\ninfo:\n  title: API\n  version: \"1.0\"\npaths: {}\n").unwrap();
         fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "spec: ./api.yaml\n",
-        ).unwrap();
+            &spec_path,
+            "openapi: \"3.0.0\"\ninfo:\n  title: API\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
+        fs::write(tmp.path().join(".phyllotaxis.yaml"), "spec: ./api.yaml\n").unwrap();
 
         let config = load_config(tmp.path());
         let result = resolve_spec_path(None, &config, tmp.path());
-        assert!(result.is_ok(), "Single spec: field should still work: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Single spec: field should still work: {:?}",
+            result
+        );
         assert_eq!(result.unwrap(), spec_path);
     }
 
@@ -475,7 +529,11 @@ mod tests {
     fn test_resolve_uses_env_var_when_no_flag() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("env-spec.yaml");
-        fs::write(&spec_path, "openapi: \"3.0.0\"\ninfo:\n  title: Env\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &spec_path,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Env\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
 
         unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", spec_path.to_str().unwrap()) };
         let result = resolve_spec_path(None, &None, tmp.path());
@@ -490,8 +548,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let flag_spec = tmp.path().join("flag-spec.yaml");
         let env_spec = tmp.path().join("env-spec.yaml");
-        fs::write(&flag_spec, "openapi: \"3.0.0\"\ninfo:\n  title: Flag\n  version: \"1.0\"\npaths: {}\n").unwrap();
-        fs::write(&env_spec, "openapi: \"3.0.0\"\ninfo:\n  title: Env\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &flag_spec,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Flag\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
+        fs::write(
+            &env_spec,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Env\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
 
         unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", env_spec.to_str().unwrap()) };
         let result = resolve_spec_path(Some(flag_spec.to_str().unwrap()), &None, tmp.path());
@@ -506,12 +572,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config_spec = tmp.path().join("config-spec.yaml");
         let env_spec = tmp.path().join("env-spec.yaml");
-        fs::write(&config_spec, "openapi: \"3.0.0\"\ninfo:\n  title: Config\n  version: \"1.0\"\npaths: {}\n").unwrap();
-        fs::write(&env_spec, "openapi: \"3.0.0\"\ninfo:\n  title: Env\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &config_spec,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Config\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
+        fs::write(
+            &env_spec,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Env\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
             "spec: ./config-spec.yaml\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = load_config(tmp.path());
         unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", env_spec.to_str().unwrap()) };
@@ -530,7 +605,10 @@ mod tests {
         let result = resolve_spec_path(None, &None, tmp.path());
         unsafe { std::env::remove_var("PHYLLOTAXIS_SPEC") };
 
-        assert!(result.is_err(), "Should error when env var points to missing file");
+        assert!(
+            result.is_err(),
+            "Should error when env var points to missing file"
+        );
         assert!(
             result.unwrap_err().to_string().contains("PHYLLOTAXIS_SPEC"),
             "Error should mention PHYLLOTAXIS_SPEC"
@@ -541,13 +619,20 @@ mod tests {
     fn test_resolve_env_var_empty_falls_through() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("openapi.yaml");
-        fs::write(&spec_path, "openapi: \"3.0.0\"\ninfo:\n  title: Auto\n  version: \"1.0\"\npaths: {}\n").unwrap();
+        fs::write(
+            &spec_path,
+            "openapi: \"3.0.0\"\ninfo:\n  title: Auto\n  version: \"1.0\"\npaths: {}\n",
+        )
+        .unwrap();
 
         unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", "") };
         let result = resolve_spec_path(None, &None, tmp.path());
         unsafe { std::env::remove_var("PHYLLOTAXIS_SPEC") };
 
-        assert!(result.is_ok(), "Empty env var should fall through to auto-detect");
+        assert!(
+            result.is_ok(),
+            "Empty env var should fall through to auto-detect"
+        );
         assert_eq!(result.unwrap(), spec_path);
     }
 }

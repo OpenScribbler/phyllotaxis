@@ -1,4 +1,6 @@
-use crate::commands::resources::{extract_object_properties, extract_resource_groups, path_prefix_group_name};
+use crate::commands::resources::{
+    extract_object_properties, extract_resource_groups, path_prefix_group_name,
+};
 use crate::commands::schemas::list_schemas;
 use crate::models::resource::slugify;
 
@@ -300,7 +302,11 @@ mod tests {
         assert!(
             results.endpoints.iter().any(|e| e.path == "/pets/search"),
             "Expected /pets/search in results, got: {:?}",
-            results.endpoints.iter().map(|e| &e.path).collect::<Vec<_>>()
+            results
+                .endpoints
+                .iter()
+                .map(|e| &e.path)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -318,8 +324,7 @@ mod tests {
     fn load_kitchen_sink_api() -> openapiv3::OpenAPI {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let content =
-            std::fs::read_to_string(manifest_dir.join("tests/fixtures/kitchen-sink.yaml"))
-                .unwrap();
+            std::fs::read_to_string(manifest_dir.join("tests/fixtures/kitchen-sink.yaml")).unwrap();
         serde_yaml_ng::from_str(&content).unwrap()
     }
 
