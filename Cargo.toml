@@ -8,6 +8,21 @@ repository = "https://github.com/OpenScribbler/phyllotaxis"
 readme = "README.md"
 keywords = ["cli", "openapi", "api", "spec"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    ".beads/",
+    ".claude/",
+    ".develop/",
+    ".github/",
+    ".vscode/",
+    "assets/",
+    "docs/",
+    "releases/",
+    "specs/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "VERSIONING.md",
+    "deny.toml",
+]
 
 [dependencies]
 human-panic = "2"
