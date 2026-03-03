@@ -160,6 +160,14 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, _is_tty: bool) -> St
         writeln!(out, "Auth: {}", schemes.join(", ")).unwrap();
     }
 
+    if !data.top_resources.is_empty() {
+        out.push('\n');
+        out.push_str("Top Resources:\n");
+        for (slug, count) in &data.top_resources {
+            writeln!(out, "  {:<24} ({} endpoints)", sanitize(slug), count).unwrap();
+        }
+    }
+
     out.push('\n');
     out.push_str("Commands:\n");
     if data.resource_count > 0 {
@@ -196,6 +204,10 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, _is_tty: bool) -> St
         bin_name
     )
     .unwrap();
+
+    if bin_name != "phyll" {
+        writeln!(out, "\nTip: 'phyll' is a shorter alias for 'phyllotaxis'.").unwrap();
+    }
 
     out
 }
@@ -452,6 +464,28 @@ pub fn render_endpoint_detail(
     out
 }
 
+pub fn render_related_schemas(
+    schemas: &[crate::commands::resources::RelatedSchema],
+    _is_tty: bool,
+) -> String {
+    let mut out = String::new();
+    if schemas.is_empty() {
+        out.push_str("Related Schemas: none\n");
+        return out;
+    }
+    out.push_str("Related Schemas:\n\n");
+    for schema in schemas {
+        if let Some(ref desc) = schema.description {
+            writeln!(out, "  {} ({}):", sanitize(&schema.name), sanitize(desc)).unwrap();
+        } else {
+            writeln!(out, "  {}:", sanitize(&schema.name)).unwrap();
+        }
+        render_fields_section(&mut out, &schema.fields);
+        out.push('\n');
+    }
+    out
+}
+
 fn render_param_section(
     out: &mut String,
     title: &str,
@@ -601,7 +635,7 @@ fn render_fields_section(out: &mut String, fields: &[crate::models::resource::Fi
     }
 }
 
-pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> String {
+pub fn render_schema_list(names: &[String], _bin_name: &str, is_tty: bool) -> String {
     let mut out = String::new();
     writeln!(out, "Schemas ({} total):", names.len()).unwrap();
 
@@ -615,7 +649,7 @@ pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> Str
 
     if is_tty {
         out.push_str("\nDrill deeper:\n");
-        writeln!(out, "  {} schemas <name>", bin_name).unwrap();
+        writeln!(out, "  phyll schemas <name>").unwrap();
     }
 
     out
@@ -623,7 +657,7 @@ pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> Str
 
 pub fn render_schema_detail(
     model: &crate::models::schema::SchemaModel,
-    bin_name: &str,
+    _bin_name: &str,
     expanded: bool,
     related_limit: Option<usize>,
     is_tty: bool,
@@ -665,14 +699,14 @@ pub fn render_schema_detail(
                 out.push_str("\nComposition: oneOf\n");
                 out.push_str("  One of:\n");
                 for v in variants {
-                    writeln!(out, "    {} schemas {}", bin_name, sanitize(v)).unwrap();
+                    writeln!(out, "    phyll schemas {}", sanitize(v)).unwrap();
                 }
             }
             Composition::AnyOf(variants) => {
                 out.push_str("\nComposition: anyOf\n");
                 out.push_str("  Any of:\n");
                 for v in variants {
-                    writeln!(out, "    {} schemas {}", bin_name, sanitize(v)).unwrap();
+                    writeln!(out, "    phyll schemas {}", sanitize(v)).unwrap();
                 }
             }
             Composition::Enum(values) => {
@@ -699,10 +733,9 @@ pub fn render_schema_detail(
             for (value, schema_name) in &disc.mapping {
                 writeln!(
                     out,
-                    "    {:<width$}  {} {} schemas {}",
+                    "    {:<width$}  {} phyll schemas {}",
                     sanitize(value),
                     arrow,
-                    bin_name,
                     sanitize(schema_name),
                     width = max_key
                 )
@@ -738,7 +771,7 @@ pub fn render_schema_detail(
 
             out.push_str("\nRelated schemas:\n");
             for name in display {
-                writeln!(out, "  {} schemas {}", bin_name, name).unwrap();
+                writeln!(out, "  phyll schemas {}", name).unwrap();
             }
             if let Some(limit) = related_limit {
                 if limit < total {
@@ -848,7 +881,7 @@ fn render_schema_fields(
 
 pub fn render_callback_list(
     callbacks: &[crate::models::resource::CallbackEntry],
-    bin_name: &str,
+    _bin_name: &str,
     is_tty: bool,
 ) -> String {
     let mut out = String::new();
@@ -877,14 +910,14 @@ pub fn render_callback_list(
     }
     if is_tty {
         out.push_str("\nDrill deeper:\n");
-        writeln!(out, "  {} callbacks <name>", bin_name).unwrap();
+        writeln!(out, "  phyll callbacks <name>").unwrap();
     }
     out
 }
 
 pub fn render_callback_detail(
     cb: &crate::models::resource::CallbackEntry,
-    bin_name: &str,
+    _bin_name: &str,
     is_tty: bool,
 ) -> String {
     let mut out = String::new();
@@ -932,7 +965,7 @@ pub fn render_callback_detail(
         if !schema_names.is_empty() {
             out.push_str("\nDrill deeper:\n");
             for name in schema_names {
-                writeln!(out, "  {} schemas {}", bin_name, sanitize(name)).unwrap();
+                writeln!(out, "  phyll schemas {}", sanitize(name)).unwrap();
             }
         }
     }
@@ -942,7 +975,7 @@ pub fn render_callback_detail(
 
 pub fn render_search(
     results: &crate::commands::search::SearchResults,
-    bin_name: &str,
+    _bin_name: &str,
     limit: Option<usize>,
     is_tty: bool,
 ) -> String {
@@ -951,14 +984,15 @@ pub fn render_search(
     let has_any = !results.resources.is_empty()
         || !results.endpoints.is_empty()
         || !results.schemas.is_empty()
-        || !results.callbacks.is_empty();
+        || !results.callbacks.is_empty()
+        || !results.security_schemes.is_empty();
 
     if !has_any {
         writeln!(out, "No results found for \"{}\".", results.term).unwrap();
         if !results.suggestions.is_empty() {
             writeln!(out, "Did you mean:").unwrap();
             for s in &results.suggestions {
-                writeln!(out, "  {} search {}", bin_name, s).unwrap();
+                writeln!(out, "  phyll search {}", s).unwrap();
             }
         }
         return out;
@@ -979,6 +1013,9 @@ pub fn render_search(
     }
     if !results.callbacks.is_empty() {
         counts.push(format!("{} callback(s)", results.callbacks.len()));
+    }
+    if !results.security_schemes.is_empty() {
+        counts.push(format!("{} security scheme(s)", results.security_schemes.len()));
     }
     writeln!(out, "Found {}", counts.join(", ")).unwrap();
 
@@ -1047,8 +1084,7 @@ pub fn render_search(
             if !e.resource_slug.is_empty() {
                 writeln!(
                     out,
-                    "    {} resources {} {} {}",
-                    bin_name,
+                    "    phyll resources {} {} {}",
                     sanitize(&e.resource_slug),
                     sanitize(&e.method),
                     sanitize(&e.path),
@@ -1107,7 +1143,34 @@ pub fn render_search(
             )
             .unwrap();
             if is_tty {
-                writeln!(out, "    {} callbacks {}", bin_name, sanitize(&cb.name)).unwrap();
+                writeln!(out, "    phyll callbacks {}", sanitize(&cb.name)).unwrap();
+            }
+        }
+    }
+
+    if !results.security_schemes.is_empty() {
+        out.push_str("\nSecurity Schemes:\n");
+        for s in &results.security_schemes {
+            if let Some(ref desc) = s.description {
+                writeln!(
+                    out,
+                    "  {} ({})  {}",
+                    sanitize(&s.name),
+                    sanitize(&s.scheme_type),
+                    sanitize(desc)
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "  {} ({})",
+                    sanitize(&s.name),
+                    sanitize(&s.scheme_type)
+                )
+                .unwrap();
+            }
+            if is_tty {
+                writeln!(out, "    phyll auth").unwrap();
             }
         }
     }
@@ -1116,10 +1179,10 @@ pub fn render_search(
     if is_tty {
         let mut drill = Vec::new();
         for r in results.resources.iter().take(5) {
-            drill.push(format!("{} resources {}", bin_name, sanitize(&r.slug)));
+            drill.push(format!("phyll resources {}", sanitize(&r.slug)));
         }
         for s in results.schemas.iter().take(5) {
-            drill.push(format!("{} schemas {}", bin_name, sanitize(&s.name)));
+            drill.push(format!("phyll schemas {}", sanitize(&s.name)));
         }
         if !drill.is_empty() {
             out.push_str("\nDrill deeper:\n");
@@ -1134,7 +1197,7 @@ pub fn render_search(
 
 pub fn render_auth(
     model: &crate::commands::auth::AuthModel,
-    bin_name: &str,
+    _bin_name: &str,
     is_tty: bool,
 ) -> String {
     let mut out = String::new();
@@ -1199,8 +1262,7 @@ pub fn render_auth(
         for scheme in &model.schemes {
             writeln!(
                 out,
-                "  {} search {}    Find endpoints using this scheme",
-                bin_name,
+                "  phyll search {}    Find endpoints using this scheme",
                 sanitize(&scheme.name)
             )
             .unwrap();
@@ -1210,7 +1272,7 @@ pub fn render_auth(
     out
 }
 
-pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: bool) -> String {
+pub fn render_resource_detail(group: &ResourceGroup, _bin_name: &str, is_tty: bool) -> String {
     let mut out = String::new();
 
     writeln!(out, "Resource: {}", sanitize(&group.display_name)).unwrap();
@@ -1253,8 +1315,7 @@ pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: boo
         for ep in &group.endpoints {
             writeln!(
                 out,
-                "  {} resources {} {} {}",
-                bin_name,
+                "  phyll resources {} {} {}",
                 sanitize(&group.slug),
                 sanitize(&ep.method),
                 sanitize(&ep.path)
@@ -1266,7 +1327,7 @@ pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: boo
     out
 }
 
-pub fn render_resource_list(groups: &[ResourceGroup], bin_name: &str, is_tty: bool) -> String {
+pub fn render_resource_list(groups: &[ResourceGroup], _bin_name: &str, is_tty: bool) -> String {
     let mut out = String::new();
     out.push_str("Resources:\n");
 
@@ -1297,9 +1358,95 @@ pub fn render_resource_list(groups: &[ResourceGroup], bin_name: &str, is_tty: bo
 
     if is_tty {
         out.push_str("\nDrill deeper:\n");
-        writeln!(out, "  {} resources <name>", bin_name).unwrap();
+        writeln!(out, "  phyll resources <name>").unwrap();
     }
 
+    out
+}
+
+pub fn render_schema_usage(
+    schema_name: &str,
+    usages: &[crate::commands::schemas::SchemaUsage],
+    _is_tty: bool,
+) -> String {
+    let mut out = String::new();
+    writeln!(out, "Schema: {}", sanitize(schema_name)).unwrap();
+    out.push('\n');
+
+    if usages.is_empty() {
+        out.push_str(
+            "  Not found in any endpoint request bodies, responses, or parameters.\n",
+        );
+        return out;
+    }
+
+    writeln!(out, "Used by {} endpoint(s):\n", usages.len()).unwrap();
+
+    let request_body: Vec<_> = usages
+        .iter()
+        .filter(|u| u.usage_type == "request body")
+        .collect();
+    let responses: Vec<_> = usages
+        .iter()
+        .filter(|u| u.usage_type == "response")
+        .collect();
+    let parameters: Vec<_> = usages
+        .iter()
+        .filter(|u| u.usage_type == "parameter")
+        .collect();
+
+    if !request_body.is_empty() {
+        out.push_str("  In request body:\n");
+        for u in &request_body {
+            writeln!(out, "    {:<6}  {}", u.method, sanitize(&u.path)).unwrap();
+            if let Some(ref slug) = u.resource_slug {
+                writeln!(
+                    out,
+                    "      phyll resources {} {} {}",
+                    sanitize(slug),
+                    u.method,
+                    sanitize(&u.path)
+                )
+                .unwrap();
+            }
+        }
+        out.push('\n');
+    }
+
+    if !responses.is_empty() {
+        out.push_str("  In response:\n");
+        for u in &responses {
+            writeln!(out, "    {:<6}  {}", u.method, sanitize(&u.path)).unwrap();
+            if let Some(ref slug) = u.resource_slug {
+                writeln!(
+                    out,
+                    "      phyll resources {} {} {}",
+                    sanitize(slug),
+                    u.method,
+                    sanitize(&u.path)
+                )
+                .unwrap();
+            }
+        }
+        out.push('\n');
+    }
+
+    if !parameters.is_empty() {
+        out.push_str("  In parameter:\n");
+        for u in &parameters {
+            writeln!(out, "    {:<6}  {}", u.method, sanitize(&u.path)).unwrap();
+        }
+    }
+
+    out
+}
+
+pub fn render_example(schema_name: &str, example: &serde_json::Value, _is_tty: bool) -> String {
+    let mut out = String::new();
+    writeln!(out, "Example ({}, required fields, auto-generated):", sanitize(schema_name)).unwrap();
+    // Pretty-print JSON with 2-space indent
+    out.push_str(&serde_json::to_string_pretty(example).unwrap_or_else(|_| "{}".to_string()));
+    out.push('\n');
     out
 }
 
@@ -1321,6 +1468,7 @@ mod tests {
             path_count: 8,
             schema_count: 4,
             callback_count: 0,
+            top_resources: vec![],
         };
         let output = render_overview(&data, "phyllotaxis", true);
         assert!(output.contains("API: Petstore API"), "Missing title");
@@ -1352,6 +1500,7 @@ mod tests {
             path_count: 0,
             schema_count: 0,
             callback_count: 0,
+            top_resources: vec![],
         };
         let output = render_overview(&data, "phyllotaxis", true);
         assert!(!output.contains("Auth:"), "Auth line should be omitted");
@@ -1370,6 +1519,7 @@ mod tests {
             path_count: 0,
             schema_count: 0,
             callback_count: 0,
+            top_resources: vec![],
         };
         let output = render_overview(&data, "phyllotaxis", true);
         assert!(output.contains("A simple API"), "Missing description");
@@ -1393,6 +1543,7 @@ mod tests {
             path_count: 0,
             schema_count: 0,
             callback_count: 0,
+            top_resources: vec![],
         };
         let output = render_overview(&data, "phyllotaxis", true);
         assert!(output.contains("Variables:"), "Missing variables section");
@@ -1432,7 +1583,7 @@ mod tests {
             "Missing drill deeper hint"
         );
         assert!(
-            output.contains("phyllotaxis resources <name>"),
+            output.contains("phyll resources <name>"),
             "Missing drill command"
         );
     }
@@ -1492,7 +1643,7 @@ mod tests {
             "DELETE endpoint should be marked deprecated"
         );
         assert!(output.contains("Drill deeper:"));
-        assert!(output.contains("phyllotaxis resources pets"));
+        assert!(output.contains("phyll resources pets"));
     }
 
     #[test]
@@ -1511,7 +1662,7 @@ mod tests {
         assert!(output.contains("  Owner"), "Missing Owner in list");
         assert!(output.contains("Drill deeper:"), "Missing drill deeper");
         assert!(
-            output.contains("phyllotaxis schemas <name>"),
+            output.contains("phyll schemas <name>"),
             "Missing drill command"
         );
     }
@@ -1683,11 +1834,11 @@ mod tests {
         let output = render_schema_detail(&model, "phyllotaxis", false, None, true);
         assert!(output.contains("oneOf"), "Missing oneOf");
         assert!(
-            output.contains("phyllotaxis schemas Pet"),
+            output.contains("phyll schemas Pet"),
             "Missing Pet variant"
         );
         assert!(
-            output.contains("phyllotaxis schemas Owner"),
+            output.contains("phyll schemas Owner"),
             "Missing Owner variant"
         );
     }
@@ -1873,7 +2024,7 @@ mod tests {
             security_schemes: vec![],
             callbacks: vec![],
             links: vec![],
-            drill_deeper: vec!["phyllotaxis schemas Pet".to_string()],
+            drill_deeper: vec!["phyll schemas Pet".to_string()],
         };
 
         let output = render_endpoint_detail(&endpoint, true);
@@ -1882,7 +2033,7 @@ mod tests {
             "Missing drill deeper header"
         );
         assert!(
-            output.contains("phyllotaxis schemas Pet"),
+            output.contains("phyll schemas Pet"),
             "Missing drill deeper command"
         );
     }
@@ -1905,7 +2056,7 @@ mod tests {
             security_schemes: vec![],
             callbacks: vec![],
             links: vec![],
-            drill_deeper: vec!["phyllotaxis schemas Pet".to_string()],
+            drill_deeper: vec!["phyll schemas Pet".to_string()],
         };
 
         let output = render_endpoint_detail(&endpoint, false);
@@ -1959,12 +2110,13 @@ mod tests {
             }],
             schemas: vec![],
             callbacks: vec![],
+            security_schemes: vec![],
             suggestions: vec![],
         };
 
         let output = render_search(&results, "phyllotaxis", None, true);
         assert!(
-            output.contains("phyllotaxis resources pets GET /pets/{id}"),
+            output.contains("phyll resources pets GET /pets/{id}"),
             "Should include drill-down command, got:\n{}",
             output
         );
@@ -1986,12 +2138,13 @@ mod tests {
             }],
             schemas: vec![],
             callbacks: vec![],
+            security_schemes: vec![],
             suggestions: vec![],
         };
 
         let output = render_search(&results, "phyllotaxis", None, true);
         assert!(
-            !output.contains("phyllotaxis resources  GET"),
+            !output.contains("phyll resources  GET"),
             "Should not include drill command when slug is empty"
         );
     }
@@ -2012,12 +2165,13 @@ mod tests {
             }],
             schemas: vec![],
             callbacks: vec![],
+            security_schemes: vec![],
             suggestions: vec![],
         };
 
         let output = render_search(&results, "phyllotaxis", None, false);
         assert!(
-            output.contains("phyllotaxis resources pets GET /pets/{id}"),
+            output.contains("phyll resources pets GET /pets/{id}"),
             "Drill command should appear even when piped (not TTY)"
         );
     }
@@ -2227,7 +2381,7 @@ mod tests {
                     parameters: vec!["userId = $response.body#/id".to_string()],
                     description: None,
                     drill_command: Some(
-                        "phyllotaxis resources users GET /users/{userId}".to_string(),
+                        "phyll resources users GET /users/{userId}".to_string(),
                     ),
                 }],
                 fields: vec![],
@@ -2397,7 +2551,7 @@ mod tests {
         assert!(output.contains("Callbacks"), "Missing header");
         assert!(output.contains("onEvent"), "Missing callback name");
         assert!(
-            output.contains("phyllotaxis callbacks <name>"),
+            output.contains("phyll callbacks <name>"),
             "Missing drill hint"
         );
     }

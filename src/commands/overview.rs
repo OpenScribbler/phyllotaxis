@@ -12,6 +12,7 @@ pub struct OverviewData {
     pub path_count: usize,
     pub schema_count: usize,
     pub callback_count: usize,
+    pub top_resources: Vec<(String, usize)>, // (slug, endpoint_count)
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -83,6 +84,13 @@ pub fn build(loaded: &LoadedSpec) -> OverviewData {
 
     let callback_count = crate::commands::callbacks::list_all_callbacks(&loaded.api).len();
 
+    let mut top_resources: Vec<(String, usize)> = resource_groups
+        .iter()
+        .map(|g| (g.slug.clone(), g.endpoints.len()))
+        .collect();
+    top_resources.sort_by(|a, b| b.1.cmp(&a.1));
+    top_resources.truncate(5);
+
     OverviewData {
         title,
         description,
@@ -94,5 +102,38 @@ pub fn build(loaded: &LoadedSpec) -> OverviewData {
         path_count,
         schema_count,
         callback_count,
+        top_resources,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec;
+
+    fn load_kitchen_sink() -> crate::spec::LoadedSpec {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let path = manifest_dir.join("tests/fixtures/kitchen-sink.yaml");
+        spec::load_spec(Some(path.to_str().unwrap()), manifest_dir).unwrap()
+    }
+
+    #[test]
+    fn test_top_resources_present_and_sorted() {
+        let loaded = load_kitchen_sink();
+        let data = build(&loaded);
+        assert!(
+            !data.top_resources.is_empty(),
+            "top_resources should be populated"
+        );
+        // Verify sorted descending by count
+        for window in data.top_resources.windows(2) {
+            assert!(
+                window[0].1 >= window[1].1,
+                "top_resources should be sorted descending: {:?}",
+                data.top_resources
+            );
+        }
+        // At most 5
+        assert!(data.top_resources.len() <= 5);
     }
 }

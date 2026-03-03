@@ -102,6 +102,7 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, is_tty: bool) -> Str
         path_count: usize,
         schema_count: usize,
         callback_count: usize,
+        top_resources: &'a [(String, usize)],
         commands: CommandsJson,
     }
 
@@ -147,6 +148,7 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, is_tty: bool) -> Str
         path_count: data.path_count,
         schema_count: data.schema_count,
         callback_count: data.callback_count,
+        top_resources: &data.top_resources,
         commands: CommandsJson {
             resources: format!("{} resources", bin_name),
             schemas: format!("{} schemas", bin_name),
@@ -158,7 +160,7 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, is_tty: bool) -> Str
     serialize(&json, is_tty)
 }
 
-pub fn render_resource_list(groups: &[ResourceGroup], bin_name: &str, is_tty: bool) -> String {
+pub fn render_resource_list(groups: &[ResourceGroup], _bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct ResourceListJson {
         resources: Vec<ResourceItemJson>,
@@ -189,13 +191,13 @@ pub fn render_resource_list(groups: &[ResourceGroup], bin_name: &str, is_tty: bo
 
     let json = ResourceListJson {
         resources,
-        drill_deeper: format!("{} resources <name>", bin_name),
+        drill_deeper: "phyll resources <name>".to_string(),
     };
 
     serialize(&json, is_tty)
 }
 
-pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: bool) -> String {
+pub fn render_resource_detail(group: &ResourceGroup, _bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct ResourceDetailJson<'a> {
         slug: &'a str,
@@ -233,8 +235,8 @@ pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: boo
         .iter()
         .map(|e| {
             format!(
-                "{} resources {} {} {}",
-                bin_name, group.slug, e.method, e.path
+                "phyll resources {} {} {}",
+                group.slug, e.method, e.path
             )
         })
         .collect();
@@ -252,7 +254,7 @@ pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: boo
     serialize(&json, is_tty)
 }
 
-pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> String {
+pub fn render_schema_list(names: &[String], _bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct SchemaListJson<'a> {
         schemas: &'a [String],
@@ -263,7 +265,7 @@ pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> Str
     let json = SchemaListJson {
         total: names.len(),
         schemas: names,
-        drill_deeper: format!("{} schemas <name>", bin_name),
+        drill_deeper: "phyll schemas <name>".to_string(),
     };
 
     serialize(&json, is_tty)
@@ -271,7 +273,7 @@ pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> Str
 
 pub fn render_schema_detail(
     model: &crate::models::schema::SchemaModel,
-    bin_name: &str,
+    _bin_name: &str,
     is_tty: bool,
 ) -> String {
     use crate::models::schema::Composition;
@@ -315,7 +317,7 @@ pub fn render_schema_detail(
             .iter()
             .filter_map(|f| f.nested_schema_name.as_ref())
             .filter(|name| seen.insert(name.to_string()))
-            .map(|name| format!("{} schemas {}", bin_name, name))
+            .map(|name| format!("phyll schemas {}", name))
             .collect()
     };
 
@@ -339,7 +341,7 @@ pub fn render_schema_detail(
 
 pub fn render_callback_list(
     callbacks: &[crate::models::resource::CallbackEntry],
-    bin_name: &str,
+    _bin_name: &str,
     is_tty: bool,
 ) -> String {
     #[derive(serde::Serialize)]
@@ -367,7 +369,7 @@ pub fn render_callback_list(
     let json = CallbackListJson {
         total: items.len(),
         callbacks: items,
-        drill_deeper: format!("{} callbacks <name>", bin_name),
+        drill_deeper: "phyll callbacks <name>".to_string(),
     };
     serialize(&json, is_tty)
 }
@@ -404,6 +406,51 @@ pub fn render_endpoint_detail(
     serialize(endpoint, is_tty)
 }
 
+pub fn render_related_schemas(
+    schemas: &[crate::commands::resources::RelatedSchema],
+    is_tty: bool,
+) -> String {
+    #[derive(serde::Serialize)]
+    struct RelatedJson<'a> {
+        related_schemas: &'a [crate::commands::resources::RelatedSchema],
+    }
+    serialize(&RelatedJson { related_schemas: schemas }, is_tty)
+}
+
+pub fn render_schema_usage(
+    schema_name: &str,
+    usages: &[crate::commands::schemas::SchemaUsage],
+    is_tty: bool,
+) -> String {
+    #[derive(serde::Serialize)]
+    struct UsageJson<'a> {
+        schema: &'a str,
+        total: usize,
+        usages: &'a [crate::commands::schemas::SchemaUsage],
+    }
+    let json = UsageJson {
+        schema: schema_name,
+        total: usages.len(),
+        usages,
+    };
+    serialize(&json, is_tty)
+}
+
+pub fn render_example(schema_name: &str, example: &serde_json::Value, is_tty: bool) -> String {
+    #[derive(serde::Serialize)]
+    struct ExampleJson<'a> {
+        schema: &'a str,
+        source: &'static str,
+        example: &'a serde_json::Value,
+    }
+    let json = ExampleJson {
+        schema: schema_name,
+        source: "auto-generated",
+        example,
+    };
+    serialize(&json, is_tty)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +480,7 @@ mod tests {
             path_count: 0,
             schema_count: 0,
             callback_count: 0,
+            top_resources: vec![],
         };
         let v = parse_json(&render_overview(&overview, "phyllotaxis", false));
         assert_eq!(v["title"], "Test API");
@@ -498,6 +546,7 @@ mod tests {
             endpoints: vec![],
             schemas: vec![],
             callbacks: vec![],
+            security_schemes: vec![],
             suggestions: vec![],
         };
         let v = parse_json(&render_search(&results, "phyllotaxis", false));
@@ -641,12 +690,12 @@ mod tests {
             security_schemes: vec![],
             callbacks: vec![],
             links: vec![],
-            drill_deeper: vec!["phyllotaxis schemas Pet".to_string()],
+            drill_deeper: vec!["phyll schemas Pet".to_string()],
         };
         let v = parse_json(&render_endpoint_detail(&endpoint, false));
         assert_eq!(
             v["drill_deeper"],
-            serde_json::json!(["phyllotaxis schemas Pet"]),
+            serde_json::json!(["phyll schemas Pet"]),
             "drill_deeper should contain the schema command"
         );
     }

@@ -350,6 +350,245 @@ fn expand_fields(
         .collect()
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct SchemaUsage {
+    pub method: String,
+    pub path: String,
+    pub usage_type: String, // "request body", "response", "parameter"
+    pub resource_slug: Option<String>,
+}
+
+/// Returns all endpoints that reference `schema_name` in their request body, responses, or parameters.
+///
+/// Checks direct `$ref` matches and one level of allOf/oneOf/anyOf composition (via `ref_matches_schema`).
+/// Does not perform deep recursive traversal — see `ref_matches_schema` for scope details.
+pub fn find_schema_usage(api: &openapiv3::OpenAPI, schema_name: &str) -> Vec<SchemaUsage> {
+    use crate::commands::resources::path_prefix_group_name;
+    use crate::models::resource::slugify;
+    use openapiv3::ReferenceOr;
+
+    let mut usages = Vec::new();
+
+    for (path_str, path_item_ref) in &api.paths.paths {
+        let path_item = match path_item_ref {
+            ReferenceOr::Item(item) => item,
+            ReferenceOr::Reference { .. } => continue,
+        };
+
+        let ops: Vec<(&str, &openapiv3::Operation)> = [
+            ("GET", &path_item.get),
+            ("POST", &path_item.post),
+            ("PUT", &path_item.put),
+            ("DELETE", &path_item.delete),
+            ("PATCH", &path_item.patch),
+            ("HEAD", &path_item.head),
+            ("OPTIONS", &path_item.options),
+            ("TRACE", &path_item.trace),
+        ]
+        .into_iter()
+        .filter_map(|(m, op)| op.as_ref().map(|o| (m, o)))
+        .collect();
+
+        for (method, op) in ops {
+            let resource_slug = op
+                .tags
+                .first()
+                .map(|t| slugify(t))
+                .or_else(|| path_prefix_group_name(path_str))
+                .map(|s| s.to_string());
+
+            // Check request body
+            if let Some(ReferenceOr::Item(body)) = &op.request_body {
+                for content in body.content.values() {
+                    if let Some(schema_ref) = &content.schema {
+                        if ref_matches_schema(api, schema_ref, schema_name) {
+                            usages.push(SchemaUsage {
+                                method: method.to_string(),
+                                path: path_str.clone(),
+                                usage_type: "request body".to_string(),
+                                resource_slug: resource_slug.clone(),
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Check responses
+            for resp_ref in op.responses.responses.values() {
+                if let ReferenceOr::Item(resp) = resp_ref {
+                    for content in resp.content.values() {
+                        if let Some(schema_ref) = &content.schema {
+                            if ref_matches_schema(api, schema_ref, schema_name) {
+                                usages.push(SchemaUsage {
+                                    method: method.to_string(),
+                                    path: path_str.clone(),
+                                    usage_type: "response".to_string(),
+                                    resource_slug: resource_slug.clone(),
+                                });
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check parameters
+            for param_ref in &op.parameters {
+                if let ReferenceOr::Item(param) = param_ref {
+                    let format = match param {
+                        openapiv3::Parameter::Query { parameter_data, .. } => {
+                            &parameter_data.format
+                        }
+                        openapiv3::Parameter::Path { parameter_data, .. } => {
+                            &parameter_data.format
+                        }
+                        openapiv3::Parameter::Header { parameter_data, .. } => {
+                            &parameter_data.format
+                        }
+                        openapiv3::Parameter::Cookie { parameter_data, .. } => {
+                            &parameter_data.format
+                        }
+                    };
+                    if let openapiv3::ParameterSchemaOrContent::Schema(ReferenceOr::Reference {
+                        reference,
+                    }) = format
+                    {
+                        if spec::schema_name_from_ref(reference) == Some(schema_name) {
+                            usages.push(SchemaUsage {
+                                method: method.to_string(),
+                                path: path_str.clone(),
+                                usage_type: "parameter".to_string(),
+                                resource_slug: resource_slug.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    usages
+}
+
+/// Returns true if `schema_ref` references `schema_name`, checking up to two levels:
+///
+/// 1. Direct `$ref` match: `$ref: #/components/schemas/TargetSchema`
+/// 2. One level of composition (`allOf`/`oneOf`/`anyOf`) with a `$ref` variant
+/// 3. Field-type match: the schema resolves to an object whose properties include a field
+///    typed as `$ref: TargetSchema` or as `array { items: { $ref: TargetSchema } }`
+///
+/// This handles transitive references like `TagDTO` embedded inside `CreatePolicyDTO`:
+/// an endpoint references `CreatePolicyDTO`, which has a `tags: TagDTO[]` field.
+///
+/// Does NOT recurse beyond one level of field inspection to avoid performance issues.
+fn ref_matches_schema(
+    api: &openapiv3::OpenAPI,
+    schema_ref: &openapiv3::ReferenceOr<openapiv3::Schema>,
+    schema_name: &str,
+) -> bool {
+    use openapiv3::ReferenceOr;
+
+    match schema_ref {
+        ReferenceOr::Reference { reference } => {
+            if spec::schema_name_from_ref(reference) == Some(schema_name) {
+                return true;
+            }
+            // Check field types in the resolved schema (transitive field reference)
+            if let Some(sname) = spec::schema_name_from_ref(reference) {
+                if let Some(resolved) = api
+                    .components
+                    .as_ref()
+                    .and_then(|c| c.schemas.get(sname))
+                    .and_then(|s| match s {
+                        ReferenceOr::Item(s) => Some(s as &openapiv3::Schema),
+                        _ => None,
+                    })
+                {
+                    return schema_has_field_ref(api, resolved, schema_name);
+                }
+            }
+            false
+        }
+        ReferenceOr::Item(schema) => {
+            // Check composition variants
+            let variants: &[ReferenceOr<openapiv3::Schema>] = match &schema.schema_kind {
+                openapiv3::SchemaKind::AllOf { all_of } => all_of,
+                openapiv3::SchemaKind::OneOf { one_of } => one_of,
+                openapiv3::SchemaKind::AnyOf { any_of } => any_of,
+                _ => &[],
+            };
+            if variants.iter().any(|v| match v {
+                ReferenceOr::Reference { reference } => {
+                    spec::schema_name_from_ref(reference) == Some(schema_name)
+                }
+                _ => false,
+            }) {
+                return true;
+            }
+            // Check field types
+            schema_has_field_ref(api, schema, schema_name)
+        }
+    }
+}
+
+/// Returns true if `schema` is an object (or allOf) with a property whose type is
+/// `$ref: schema_name` or `array { items: { $ref: schema_name } }`.
+fn schema_has_field_ref(
+    api: &openapiv3::OpenAPI,
+    schema: &openapiv3::Schema,
+    schema_name: &str,
+) -> bool {
+    use crate::commands::resources::extract_object_properties;
+    use openapiv3::ReferenceOr;
+
+    // For allOf: check each constituent
+    if let openapiv3::SchemaKind::AllOf { all_of } = &schema.schema_kind {
+        for sub_ref in all_of {
+            let sub_schema: Option<&openapiv3::Schema> = match sub_ref {
+                ReferenceOr::Item(s) => Some(s),
+                ReferenceOr::Reference { reference } => {
+                    spec::schema_name_from_ref(reference).and_then(|sname| {
+                        api.components
+                            .as_ref()
+                            .and_then(|c| c.schemas.get(sname))
+                            .and_then(|s| match s {
+                                ReferenceOr::Item(s) => Some(s as &openapiv3::Schema),
+                                _ => None,
+                            })
+                    })
+                }
+            };
+            if let Some(sub_schema) = sub_schema {
+                if schema_has_field_ref(api, sub_schema, schema_name) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    let properties = match extract_object_properties(schema) {
+        Some((props, _)) => props,
+        None => return false,
+    };
+
+    properties.values().any(|ref_or| match ref_or {
+        ReferenceOr::Reference { reference } => {
+            spec::schema_name_from_ref(reference) == Some(schema_name)
+        }
+        ReferenceOr::Item(boxed) => {
+            // Check array-of-ref fields: type: array, items: { $ref: schema_name }
+            if let openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) = &boxed.schema_kind {
+                if let Some(ReferenceOr::Reference { reference }) = arr.items.as_ref() {
+                    return spec::schema_name_from_ref(reference) == Some(schema_name);
+                }
+            }
+            false
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,5 +1070,58 @@ mod tests {
             }
             other => panic!("Expected AnyOf composition, got {:?}", other),
         }
+    }
+
+    // ─── Task 4.1: find_schema_usage tests ───
+
+    #[test]
+    fn test_find_schema_usage_request_body() {
+        let api = load_kitchen_sink_api();
+        // CreateUserRequest is used as the request body for POST /users
+        let usages = find_schema_usage(&api, "CreateUserRequest");
+        assert!(!usages.is_empty(), "CreateUserRequest should have usages");
+        let post_users = usages.iter().find(|u| {
+            u.method == "POST" && u.path == "/users" && u.usage_type == "request body"
+        });
+        assert!(
+            post_users.is_some(),
+            "Expected POST /users request body usage, got: {:?}",
+            usages
+        );
+    }
+
+    #[test]
+    fn test_find_schema_usage_response() {
+        let api = load_kitchen_sink_api();
+        // User is returned in the response of GET /users/{id} and POST /users
+        let usages = find_schema_usage(&api, "User");
+        let has_response = usages.iter().any(|u| u.usage_type == "response");
+        assert!(
+            has_response,
+            "User should appear in at least one response, got: {:?}",
+            usages
+        );
+    }
+
+    #[test]
+    fn test_find_schema_usage_not_found() {
+        let api = load_kitchen_sink_api();
+        // NonExistentSchema has no usages
+        let usages = find_schema_usage(&api, "NonExistentSchema");
+        assert!(usages.is_empty(), "Unknown schema should have zero usages");
+    }
+
+    #[test]
+    fn test_find_schema_usage_petstore() {
+        let api = load_petstore_api();
+        // Pet is used in responses for GET /pets and GET /pets/{id}
+        let usages = find_schema_usage(&api, "Pet");
+        assert!(!usages.is_empty(), "Pet should have usages");
+        let response_usages: Vec<_> =
+            usages.iter().filter(|u| u.usage_type == "response").collect();
+        assert!(
+            !response_usages.is_empty(),
+            "Pet should appear in at least one response"
+        );
     }
 }

@@ -278,7 +278,7 @@ paths:
       summary: Delete a user
       responses:
         '204':
-          description: User deleted
+          description: Confirms the user record was permanently removed from the system.
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -660,6 +660,7 @@ paths:
             type: string
             format: uri
       requestBody:
+        description: Subscription configuration for the new webhook endpoint.
         required: true
         content:
           application/json:
@@ -1380,6 +1381,7 @@ components:
 
     # ── NOTIFICATION MODELS ──────────────────────
     SubscriptionRequest:
+      description: Payload for creating a new webhook subscription with event filtering.
       type: object
       required: [events]
       properties:
@@ -1635,7 +1637,7 @@ components:
     GeoLocation:
       title: Geographic Location
       type: object
-      description: GPS coordinates with precision constraints
+      description: Represents a geographic coordinate used for geospatial queries and location tracking.
       properties:
         latitude:
           type: number
@@ -1662,6 +1664,58 @@ components:
       enum: [0, 1, 2, 3, 4]
       description: 'Priority level: 0=critical, 1=high, 2=medium, 3=low, 4=backlog'
       example: 2
+
+    # ── BUG-1 regression: type:boolean + format:boolean parsed as AnySchema by openapiv3
+    BooleanFormatEntity:
+      required:
+        - isActive
+        - name
+      type: object
+      properties:
+        name:
+          type: string
+        isActive:
+          type: boolean
+          format: boolean
+          description: Active flag with non-standard format:boolean annotation
+
+    # ── BUG-2 regression: discriminator value override for allOf subtypes
+    # BaseEntity has a discriminator mapping subtypes via the 'kind' field
+    BaseEntity:
+      required:
+        - kind
+        - name
+      type: object
+      properties:
+        kind:
+          type: string
+        name:
+          type: string
+      discriminator:
+        propertyName: kind
+        mapping:
+          widget: '#/components/schemas/WidgetEntity'
+          gadget: '#/components/schemas/GadgetEntity'
+
+    WidgetEntity:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - required:
+            - widgetCode
+          type: object
+          properties:
+            widgetCode:
+              type: string
+
+    GadgetEntity:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - required:
+            - gadgetSerial
+          type: object
+          properties:
+            gadgetSerial:
+              type: string
 
   # ── REUSABLE RESPONSES ────────────────────────
   responses:
