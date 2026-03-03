@@ -51,8 +51,15 @@ pub fn build_auth_model(api: &openapiv3::OpenAPI) -> AuthModel {
 
             let (scheme_type, detail, description, oauth2_flows) = match scheme {
                 openapiv3::SecurityScheme::HTTP {
-                    scheme, description, ..
-                } => ("http".to_string(), scheme.clone(), description.clone(), vec![]),
+                    scheme,
+                    description,
+                    ..
+                } => (
+                    "http".to_string(),
+                    scheme.clone(),
+                    description.clone(),
+                    vec![],
+                ),
                 openapiv3::SecurityScheme::APIKey {
                     location,
                     name,
@@ -71,14 +78,21 @@ pub fn build_auth_model(api: &openapiv3::OpenAPI) -> AuthModel {
                         vec![],
                     )
                 }
-                openapiv3::SecurityScheme::OAuth2 { flows, description, .. } => {
+                openapiv3::SecurityScheme::OAuth2 {
+                    flows, description, ..
+                } => {
                     let oauth2_flows = extract_oauth2_flows(flows);
                     let detail = oauth2_flows
                         .iter()
                         .map(|f| f.flow_type.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    ("oauth2".to_string(), detail, description.clone(), oauth2_flows)
+                    (
+                        "oauth2".to_string(),
+                        detail,
+                        description.clone(),
+                        oauth2_flows,
+                    )
                 }
                 openapiv3::SecurityScheme::OpenIDConnect { description, .. } => (
                     "openIdConnect".to_string(),
@@ -164,8 +178,14 @@ fn count_operations(api: &openapiv3::OpenAPI) -> usize {
     for (_path, item) in api.paths.iter() {
         if let openapiv3::ReferenceOr::Item(item) = item {
             for op in [
-                &item.get, &item.put, &item.post, &item.delete, &item.options,
-                &item.head, &item.patch, &item.trace,
+                &item.get,
+                &item.put,
+                &item.post,
+                &item.delete,
+                &item.options,
+                &item.head,
+                &item.patch,
+                &item.trace,
             ] {
                 if op.is_some() {
                     count += 1;
@@ -188,8 +208,14 @@ fn count_scheme_usage(api: &openapiv3::OpenAPI, scheme_name: &str) -> usize {
     for (_path, item) in api.paths.iter() {
         if let openapiv3::ReferenceOr::Item(item) = item {
             for op in [
-                &item.get, &item.put, &item.post, &item.delete, &item.options,
-                &item.head, &item.patch, &item.trace,
+                &item.get,
+                &item.put,
+                &item.post,
+                &item.delete,
+                &item.options,
+                &item.head,
+                &item.patch,
+                &item.trace,
             ]
             .into_iter()
             .flatten()
@@ -229,8 +255,14 @@ mod tests {
         assert_eq!(scheme.name, "bearerAuth");
         assert_eq!(scheme.scheme_type, "http");
         assert_eq!(scheme.detail, "bearer");
-        assert!(scheme.oauth2_flows.is_empty(), "HTTP scheme should have no OAuth2 flows");
-        assert!(scheme.usage_count > 0, "bearerAuth should be used by operations");
+        assert!(
+            scheme.oauth2_flows.is_empty(),
+            "HTTP scheme should have no OAuth2 flows"
+        );
+        assert!(
+            scheme.usage_count > 0,
+            "bearerAuth should be used by operations"
+        );
         assert_eq!(
             scheme.usage_count, model.total_operations,
             "Global security should apply to all operations"
