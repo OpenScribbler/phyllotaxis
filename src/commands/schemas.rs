@@ -204,7 +204,9 @@ fn extract_composition_fields(
                         .as_ref()
                         .and_then(|c| c.schemas.get(sname))
                         .and_then(|s| match s {
-                            openapiv3::ReferenceOr::Item(schema) => Some(schema as &openapiv3::Schema),
+                            openapiv3::ReferenceOr::Item(schema) => {
+                                Some(schema as &openapiv3::Schema)
+                            }
                             _ => None,
                         })
                 })
@@ -339,7 +341,11 @@ mod tests {
         let api = load_petstore_api();
         let result = find_schema(&api, "pet");
         assert!(result.is_some());
-        assert_eq!(result.unwrap().0, "Pet", "Should return canonical name 'Pet' for input 'pet'");
+        assert_eq!(
+            result.unwrap().0,
+            "Pet",
+            "Should return canonical name 'Pet' for input 'pet'"
+        );
     }
 
     #[test]
@@ -375,7 +381,10 @@ mod tests {
             Some(Composition::AllOf) => {}
             other => panic!("Expected AllOf composition, got {:?}", other),
         }
-        assert!(!model.fields.is_empty(), "AllOf should have flattened fields");
+        assert!(
+            !model.fields.is_empty(),
+            "AllOf should have flattened fields"
+        );
     }
 
     #[test]
@@ -449,7 +458,10 @@ mod tests {
     fn test_build_schema_model_discriminator() {
         let api = load_petstore_api();
         let model = build_schema_model(&api, "PetOrOwner", false, 5).unwrap();
-        let disc = model.discriminator.as_ref().expect("PetOrOwner should have a discriminator");
+        let disc = model
+            .discriminator
+            .as_ref()
+            .expect("PetOrOwner should have a discriminator");
         assert_eq!(disc.property_name, "type");
         assert!(
             disc.mapping.iter().any(|(k, v)| k == "pet" && v == "Pet"),
@@ -457,7 +469,9 @@ mod tests {
             disc.mapping
         );
         assert!(
-            disc.mapping.iter().any(|(k, v)| k == "owner" && v == "Owner"),
+            disc.mapping
+                .iter()
+                .any(|(k, v)| k == "owner" && v == "Owner"),
             "Expected owner→Owner mapping"
         );
     }
@@ -483,7 +497,8 @@ mod tests {
         assert_eq!(
             model.title.as_deref(),
             Some("Geographic Location"),
-            "GeoLocation should have title 'Geographic Location', got: {:?}", model.title
+            "GeoLocation should have title 'Geographic Location', got: {:?}",
+            model.title
         );
     }
 
@@ -491,7 +506,11 @@ mod tests {
     fn test_schema_no_title_is_none() {
         let api = load_kitchen_sink_api();
         let model = build_schema_model(&api, "User", false, 5).unwrap();
-        assert!(model.title.is_none(), "User has no title, got: {:?}", model.title);
+        assert!(
+            model.title.is_none(),
+            "User has no title, got: {:?}",
+            model.title
+        );
     }
 
     #[test]
@@ -510,7 +529,11 @@ mod tests {
             details.nested_schema_name
         );
         // Spot-check that ErrorDetail's fields appear
-        let field_names: Vec<&str> = details.nested_fields.iter().map(|f| f.name.as_str()).collect();
+        let field_names: Vec<&str> = details
+            .nested_fields
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
         assert!(
             field_names.contains(&"field") || field_names.contains(&"reason"),
             "Expanded details should contain ErrorDetail fields (field, reason), got: {:?}",
@@ -529,7 +552,10 @@ mod tests {
             model.base_type
         );
         assert!(model.fields.is_empty(), "not schema should have no fields");
-        assert!(model.composition.is_none(), "not schema should have no composition");
+        assert!(
+            model.composition.is_none(),
+            "not schema should have no composition"
+        );
     }
 
     #[test]
@@ -559,7 +585,12 @@ mod tests {
                     "Expected 'string' variant, got: {:?}",
                     variants
                 );
-                assert_eq!(variants.len(), 2, "Expected 2 variants, got: {:?}", variants);
+                assert_eq!(
+                    variants.len(),
+                    2,
+                    "Expected 2 variants, got: {:?}",
+                    variants
+                );
             }
             other => panic!("Expected OneOf composition, got {:?}", other),
         }
@@ -586,7 +617,12 @@ mod tests {
                     "Expected 'integer' variant, got: {:?}",
                     variants
                 );
-                assert_eq!(variants.len(), 3, "Expected 3 variants, got: {:?}", variants);
+                assert_eq!(
+                    variants.len(),
+                    3,
+                    "Expected 3 variants, got: {:?}",
+                    variants
+                );
             }
             other => panic!("Expected AnyOf composition, got {:?}", other),
         }
@@ -599,16 +635,35 @@ mod tests {
         let api = load_kitchen_sink_api();
         let model = build_schema_model(&api, "SearchResult", false, 5).unwrap();
 
-        assert!(!model.fields.is_empty(), "anyOf with $ref variants should have merged fields");
+        assert!(
+            !model.fields.is_empty(),
+            "anyOf with $ref variants should have merged fields"
+        );
 
         let field_names: Vec<&str> = model.fields.iter().map(|f| f.name.as_str()).collect();
         // From User:
-        assert!(field_names.contains(&"username"), "Missing User field 'username': {:?}", field_names);
-        assert!(field_names.contains(&"email"), "Missing User field 'email': {:?}", field_names);
+        assert!(
+            field_names.contains(&"username"),
+            "Missing User field 'username': {:?}",
+            field_names
+        );
+        assert!(
+            field_names.contains(&"email"),
+            "Missing User field 'email': {:?}",
+            field_names
+        );
         // From PetBase:
-        assert!(field_names.contains(&"species"), "Missing PetBase field 'species': {:?}", field_names);
+        assert!(
+            field_names.contains(&"species"),
+            "Missing PetBase field 'species': {:?}",
+            field_names
+        );
         // From FileMetadata:
-        assert!(field_names.contains(&"filename"), "Missing FileMetadata field 'filename': {:?}", field_names);
+        assert!(
+            field_names.contains(&"filename"),
+            "Missing FileMetadata field 'filename': {:?}",
+            field_names
+        );
 
         // Composition should still be present
         match &model.composition {
@@ -626,18 +681,41 @@ mod tests {
         let api = load_kitchen_sink_api();
         let model = build_schema_model(&api, "Pet", false, 5).unwrap();
 
-        assert!(!model.fields.is_empty(), "oneOf with $ref variants should have merged fields");
+        assert!(
+            !model.fields.is_empty(),
+            "oneOf with $ref variants should have merged fields"
+        );
 
         let field_names: Vec<&str> = model.fields.iter().map(|f| f.name.as_str()).collect();
         // From PetBase (shared via allOf):
-        assert!(field_names.contains(&"name"), "Missing PetBase field 'name': {:?}", field_names);
-        assert!(field_names.contains(&"species"), "Missing PetBase field 'species': {:?}", field_names);
+        assert!(
+            field_names.contains(&"name"),
+            "Missing PetBase field 'name': {:?}",
+            field_names
+        );
+        assert!(
+            field_names.contains(&"species"),
+            "Missing PetBase field 'species': {:?}",
+            field_names
+        );
         // From Dog:
-        assert!(field_names.contains(&"breed"), "Missing Dog field 'breed': {:?}", field_names);
+        assert!(
+            field_names.contains(&"breed"),
+            "Missing Dog field 'breed': {:?}",
+            field_names
+        );
         // From Cat:
-        assert!(field_names.contains(&"indoor"), "Missing Cat field 'indoor': {:?}", field_names);
+        assert!(
+            field_names.contains(&"indoor"),
+            "Missing Cat field 'indoor': {:?}",
+            field_names
+        );
         // From Bird:
-        assert!(field_names.contains(&"can_fly"), "Missing Bird field 'can_fly': {:?}", field_names);
+        assert!(
+            field_names.contains(&"can_fly"),
+            "Missing Bird field 'can_fly': {:?}",
+            field_names
+        );
     }
 
     #[test]
@@ -646,6 +724,9 @@ mod tests {
         // Should have no fields (primitives have no object properties).
         let api = load_kitchen_sink_api();
         let model = build_schema_model(&api, "InsecureSsl", false, 5).unwrap();
-        assert!(model.fields.is_empty(), "oneOf with inline primitives should have no fields");
+        assert!(
+            model.fields.is_empty(),
+            "oneOf with inline primitives should have no fields"
+        );
     }
 }
