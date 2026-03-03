@@ -7,83 +7,93 @@
                   ██
                 ▀▀▀
 ```
-A CLI for progressive disclosure of OpenAPI specs. Instead of dumping an entire spec at once, phyllotaxis lets you drill down level by level — overview, resources, endpoints, schemas — so you (or an LLM) only see what's relevant. Dual output in plain text and JSON.
+A CLI that lets you explore OpenAPI specs one layer at a time instead of reading the whole thing. Start with an overview, pick a resource, drill into an endpoint, check a schema. You (or an LLM) only see what you actually need.
 
-**Alias:** `phyll` — a shorter name for the same binary.
+Outputs plain text or JSON. Also available as `phyll` (shorter alias, same binary).
 
-## Getting Started
+## Install
 
-### 1. Clone the repo
+### Download a binary (recommended)
+
+Grab the latest release for your platform from [GitHub Releases](https://github.com/OpenScribbler/phyllotaxis/releases/latest).
+
+**Linux / macOS:**
 
 ```bash
-mkdir -p ~/.local/src
-git clone https://github.com/OpenScribbler/phyllotaxis.git ~/.local/src/phyllotaxis
+# Pick your platform:
+#   x86_64-unknown-linux-gnu    (Linux x86_64)
+#   aarch64-unknown-linux-gnu   (Linux ARM64)
+#   x86_64-apple-darwin         (macOS Intel)
+#   aarch64-apple-darwin        (macOS Apple Silicon)
+PLATFORM="x86_64-unknown-linux-gnu"
+
+curl -L "https://github.com/OpenScribbler/phyllotaxis/releases/latest/download/phyllotaxis-${PLATFORM}.tar.gz" \
+  | tar xz -C ~/.local/bin
 ```
 
-### 2. Build the CLI
+**Windows:**
+
+Download the `phyllotaxis-x86_64-pc-windows-msvc.zip` from the [releases page](https://github.com/OpenScribbler/phyllotaxis/releases/latest), extract it, and add the folder to your PATH.
+
+### Build from source
 
 Requires Rust (install via [rustup](https://rustup.rs/)).
 
 ```bash
-cd ~/.local/src/phyllotaxis
+git clone https://github.com/OpenScribbler/phyllotaxis.git
+cd phyllotaxis
 cargo build --release
+# Binaries are in target/release/phyllotaxis and target/release/phyll
 ```
 
-### 3. Add it to your PATH
-
-```bash
-echo 'export PATH="$HOME/.local/src/phyllotaxis/target/release:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-Then verify it works:
+### Verify
 
 ```bash
 phyll --help
 ```
 
-## What It Does
+## Why?
 
-OpenAPI specs are dense. A mid-size API can have hundreds of endpoints, thousands of schema fields, and nested references everywhere. Phyllotaxis applies progressive disclosure — you start with a high-level overview and drill deeper only where you need to.
+OpenAPI specs get big fast. A mid-size API can have hundreds of endpoints, thousands of schema fields, and nested `$ref`s everywhere. Phyllotaxis gives you layers: start high, go deep only where you care.
 
-This matters for LLM-assisted workflows. Instead of stuffing an entire spec into a prompt (blowing token budgets and diluting focus), you feed the LLM exactly the slice it needs: "show me the Pet schema" or "what parameters does POST /pets take?"
+This is especially useful for LLM workflows. Instead of stuffing an entire spec into a prompt and burning tokens, you can give the model just the slice it needs: "show me the Pet schema" or "what does POST /pets expect?"
 
 ## Commands
 
-| Command | Description |
+| Command | What it shows |
 |---------|-------------|
-| `phyll` | API overview — title, description, base URLs, auth, top resources |
-| `phyll resources` | List all resource groups with endpoint counts |
-| `phyll resources <name>` | Endpoints within a resource group |
-| `phyll resources <name> <METHOD> <path>` | Full endpoint detail — parameters, request body, responses |
-| `phyll schemas` | List all schemas |
-| `phyll schemas <name>` | Schema detail — fields, types, composition |
-| `phyll schemas <name> --used-by` | Which endpoints use this schema in requests, responses, or parameters |
-| `phyll schemas <name> --example` | Generate an example JSON object from the schema |
-| `phyll auth` | Authentication schemes and usage |
-| `phyll search <term>` | Search across resources, endpoints, schemas, security schemes, and callbacks |
-| `phyll callbacks` | List all webhook callbacks |
-| `phyll callbacks <name>` | Callback detail — operations, URL expressions, schemas |
+| `phyll` | API overview: title, description, base URLs, auth, top resources |
+| `phyll resources` | All resource groups with endpoint counts |
+| `phyll resources <name>` | Endpoints in a resource group |
+| `phyll resources <name> <METHOD> <path>` | Full endpoint detail: params, request body, responses |
+| `phyll schemas` | All schemas |
+| `phyll schemas <name>` | Schema detail: fields, types, composition |
+| `phyll schemas <name> --used-by` | Which endpoints use this schema |
+| `phyll schemas <name> --example` | Generate an example JSON object |
+| `phyll auth` | Auth schemes and how they're used |
+| `phyll search <term>` | Search across everything |
+| `phyll callbacks` | Webhook callbacks |
+| `phyll callbacks <name>` | Callback detail |
 | `phyll init` | Auto-detect spec files and write config |
-| `phyll completions <shell>` | Generate shell completions (bash, zsh, fish, powershell, elvish) |
+| `phyll completions <shell>` | Shell completions (bash, zsh, fish, powershell, elvish) |
 
 ### Global Flags
 
 ```
---spec <name|path>           Override spec file (named spec from config, or file path)
---json                       Output in JSON format
---expand                     Recursively inline nested schemas (max depth 5)
---related-limit <n>          Cap the number of related schemas shown in schema detail
+--spec <name|path>           Override which spec file to use
+--json                       Output JSON instead of text
+--expand                     Inline nested schemas recursively (max depth 5)
+--related-limit <n>          Cap how many related schemas to show
 ```
 
 ### Endpoint Detail Flags
 
 ```
---context     Show related schemas expanded after the endpoint detail
+--context     Show related schemas expanded after the endpoint
 --example     Show an auto-generated example request/response body
 ```
 
-## Progressive Disclosure Levels
+## How the Layers Work
 
 ### Level 0: Overview
 
@@ -200,7 +210,7 @@ Operations:
 
 ## Example Generation
 
-Generate example JSON objects from any schema, with format-aware placeholders:
+Generate example JSON from any schema:
 
 ```bash
 $ phyll schemas Pet --example
@@ -211,7 +221,7 @@ Example (Pet, required fields, auto-generated):
 }
 ```
 
-Examples use intelligent placeholders based on field types and formats:
+Placeholders are based on the field type and format:
 
 | Type/Format | Placeholder |
 |-------------|-------------|
@@ -224,11 +234,11 @@ Examples use intelligent placeholders based on field types and formats:
 | `boolean` | `true` |
 | enum | First enum value |
 
-When the spec includes `example` values on schemas or properties, those are used instead of placeholders. For discriminated unions (oneOf with a discriminator), the `type` field is set to the correct mapped value.
+If the spec has `example` values on schemas or properties, those get used instead. For discriminated unions (oneOf with a discriminator), the `type` field gets set to the correct mapped value.
 
 ## Reverse Schema Lookup
 
-Find which endpoints use a specific schema:
+Find out which endpoints use a given schema:
 
 ```bash
 $ phyll schemas TagDTO --used-by
@@ -246,11 +256,11 @@ Used by 114 endpoint(s):
     ...
 ```
 
-Matches include direct `$ref` references, composition variants (allOf/oneOf/anyOf), and transitive field-type references (e.g., a schema embedded as a field inside another schema that an endpoint uses).
+This catches direct `$ref` references, allOf/oneOf/anyOf compositions, and schemas nested as fields inside other schemas that an endpoint uses.
 
 ## Related Schemas (--context)
 
-When viewing endpoint detail, `--context` expands the nested schemas referenced by the request/response body:
+When you're looking at an endpoint, `--context` expands the schemas referenced in the request/response body:
 
 ```bash
 $ phyll resources access-policy-v2 POST /api/v2/access-policies --context
@@ -269,7 +279,7 @@ Related Schemas:
   ...
 ```
 
-For polymorphic endpoints (oneOf/anyOf), `--context` shows the variant schemas.
+For oneOf/anyOf endpoints, `--context` shows the variant schemas too.
 
 ## Schema Expansion
 
@@ -295,13 +305,13 @@ Search across resources, endpoints, schemas, security schemes, and callbacks:
 $ phyll search "authentication"
 ```
 
-Search indexes: resource names/descriptions, endpoint paths/summaries/descriptions, parameter names/descriptions, request body descriptions, response descriptions, schema names/descriptions/field names, and security scheme names/descriptions.
+Searches resource names/descriptions, endpoint paths/summaries/descriptions, parameter names/descriptions, request body descriptions, response descriptions, schema names/descriptions/field names, and security scheme names/descriptions.
 
-When a match comes from a non-obvious source (parameter name, description text, security scheme), the result is annotated with the match reason.
+If a match comes from somewhere non-obvious (like a parameter name or description text), the result tells you why it matched.
 
 ## JSON Output
 
-Every command supports `--json` for machine consumption. JSON is pretty-printed in a terminal and compact when piped:
+Every command supports `--json`. It's pretty-printed in a terminal and compact when piped:
 
 ```bash
 $ phyll --json schemas Pet | jq '.fields[].name'
@@ -314,7 +324,7 @@ $ phyll --json schemas Pet | jq '.fields[].name'
 
 ## Fuzzy Matching
 
-Mistype a resource, schema, or callback name and phyllotaxis suggests close matches:
+Mistype a name and phyllotaxis suggests close matches:
 
 ```bash
 $ phyll resources pet
@@ -325,7 +335,7 @@ Did you mean:
 
 ## Helpful Error Messages
 
-Pass a method and path as a single quoted argument and phyllotaxis detects the mistake:
+If you accidentally pass the method and path as a single quoted argument, phyllotaxis catches it:
 
 ```bash
 $ phyll resources pets "GET /pets"
@@ -337,12 +347,12 @@ Error: Method and path must be separate arguments.
 
 ## Spec Discovery
 
-Phyllotaxis finds your spec file in four ways (in priority order):
+Phyllotaxis finds your spec file in four ways (checked in this order):
 
-1. **`--spec` flag** — named spec from config or file path, always wins
-2. **`PHYLLOTAXIS_SPEC` env var** — set to a file path; errors if set but the file doesn't exist, silently ignored if empty
-3. **`.phyllotaxis.yaml` config** — created by `phyll init`, checked in the current directory and parents
-4. **Auto-detect** — scans for `*.yaml`/`*.yml`/`*.json` files containing `openapi:` in the first 200 bytes
+1. **`--spec` flag** - named spec from config or a file path, always wins
+2. **`PHYLLOTAXIS_SPEC` env var** - set to a file path; errors if the file doesn't exist, ignored if empty
+3. **`.phyllotaxis.yaml` config** - created by `phyll init`, checked in the current directory and parents
+4. **Auto-detect** - scans for `*.yaml`/`*.yml`/`*.json` files with `openapi:` in the first 200 bytes
 
 Run `phyll init` to set up a config:
 
@@ -375,21 +385,21 @@ variables:
   env: staging
 ```
 
-Then select a spec by name:
+Then pick one by name:
 
 ```bash
 $ phyll --spec internal resources
 ```
 
-The `variables` map substitutes server URL template variables (e.g., `{tenant}` becomes `my-org` in base URL output).
+The `variables` map fills in server URL template variables (e.g., `{tenant}` becomes `my-org` in base URL output).
 
 ## Compatibility
 
-- **OpenAPI 3.0.x** — fully supported
-- **OpenAPI 3.1** — not supported (the `openapiv3` parser targets 3.0)
-- **Swagger / OpenAPI 2.0** — not supported
-- **YAML and JSON specs** — both work
-- **`$ref` resolution** — local references only (no external file refs)
+- **OpenAPI 3.0.x** - fully supported
+- **OpenAPI 3.1** - not supported (the `openapiv3` parser targets 3.0)
+- **Swagger / OpenAPI 2.0** - not supported
+- **YAML and JSON specs** - both work
+- **`$ref` resolution** - local references only, no external file refs
 
 ## Project Structure
 
@@ -400,7 +410,7 @@ phyllotaxis/
 │   ├── lib.rs               # Public crate API (re-exports)
 │   ├── spec.rs              # Config loading, spec resolution, parsing
 │   ├── commands/
-│   │   ├── overview.rs      # L0: API overview builder
+│   │   ├── overview.rs      # L0: API overview
 │   │   ├── resources.rs     # L1-L3: resource groups, detail, endpoints
 │   │   ├── schemas.rs       # Schema listing, detail, expansion, --used-by
 │   │   ├── examples.rs      # Example generation from schemas
@@ -409,15 +419,15 @@ phyllotaxis/
 │   │   ├── callbacks.rs     # Webhook callback extraction
 │   │   └── init.rs          # Framework detection, interactive setup
 │   ├── models/
-│   │   ├── resource.rs      # Data structs + utility functions
+│   │   ├── resource.rs      # Data structs + helpers
 │   │   └── schema.rs        # SchemaModel, Composition enum
 │   └── render/
-│       ├── text.rs          # Plain text renderers
-│       └── json.rs          # JSON renderers
+│       ├── text.rs          # Plain text output
+│       └── json.rs          # JSON output
 └── tests/
     ├── fixtures/
     │   ├── petstore.yaml    # Test fixture
-    │   └── kitchen-sink.yaml # Comprehensive edge-case fixture
+    │   └── kitchen-sink.yaml # Edge case fixture
     ├── fixture_sanity.rs    # Fixture parse validation
     ├── integration_tests.rs # End-to-end CLI tests
     └── lib_tests.rs         # Library API tests
