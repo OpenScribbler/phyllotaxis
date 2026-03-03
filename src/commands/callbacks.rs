@@ -28,55 +28,63 @@ fn build_callback_entry(
         .iter()
         .flat_map(|(url_expr, path_item)| {
             let cb_methods: &[(&str, &Option<openapiv3::Operation>)] = &[
-                ("POST", &path_item.post), ("GET", &path_item.get),
-                ("PUT", &path_item.put), ("DELETE", &path_item.delete),
+                ("POST", &path_item.post),
+                ("GET", &path_item.get),
+                ("PUT", &path_item.put),
+                ("DELETE", &path_item.delete),
                 ("PATCH", &path_item.patch),
             ];
-            cb_methods.iter().filter_map(|&(m, op_opt)| {
-                let op = op_opt.as_ref()?;
+            cb_methods
+                .iter()
+                .filter_map(|&(m, op_opt)| {
+                    let op = op_opt.as_ref()?;
 
-                let body_schema = op.request_body.as_ref().and_then(|rb_ref| {
-                    let rb = match rb_ref {
-                        openapiv3::ReferenceOr::Item(rb) => rb,
-                        _ => return None,
-                    };
-                    let media = rb.content.get("application/json")
-                        .or_else(|| rb.content.values().next())?;
-                    match media.schema.as_ref()? {
-                        openapiv3::ReferenceOr::Reference { reference } => {
-                            spec::schema_name_from_ref(reference).map(|s| s.to_string())
+                    let body_schema = op.request_body.as_ref().and_then(|rb_ref| {
+                        let rb = match rb_ref {
+                            openapiv3::ReferenceOr::Item(rb) => rb,
+                            _ => return None,
+                        };
+                        let media = rb
+                            .content
+                            .get("application/json")
+                            .or_else(|| rb.content.values().next())?;
+                        match media.schema.as_ref()? {
+                            openapiv3::ReferenceOr::Reference { reference } => {
+                                spec::schema_name_from_ref(reference).map(|s| s.to_string())
+                            }
+                            openapiv3::ReferenceOr::Item(_) => Some("inline object".to_string()),
                         }
-                        openapiv3::ReferenceOr::Item(_) => {
-                            Some("inline object".to_string())
-                        }
-                    }
-                });
+                    });
 
-                let responses: Vec<CallbackResponse> = op
-                    .responses
-                    .responses
-                    .iter()
-                    .map(|(status, resp_ref)| {
-                        let code = match status {
-                            openapiv3::StatusCode::Code(c) => c.to_string(),
-                            openapiv3::StatusCode::Range(r) => format!("{}XX", r),
-                        };
-                        let desc = match resp_ref {
-                            openapiv3::ReferenceOr::Item(r) => r.description.clone(),
-                            _ => String::new(),
-                        };
-                        CallbackResponse { status_code: code, description: desc }
+                    let responses: Vec<CallbackResponse> = op
+                        .responses
+                        .responses
+                        .iter()
+                        .map(|(status, resp_ref)| {
+                            let code = match status {
+                                openapiv3::StatusCode::Code(c) => c.to_string(),
+                                openapiv3::StatusCode::Range(r) => format!("{}XX", r),
+                            };
+                            let desc = match resp_ref {
+                                openapiv3::ReferenceOr::Item(r) => r.description.clone(),
+                                _ => String::new(),
+                            };
+                            CallbackResponse {
+                                status_code: code,
+                                description: desc,
+                            }
+                        })
+                        .collect();
+
+                    Some(CallbackOperation {
+                        method: m.to_string(),
+                        url_expression: url_expr.clone(),
+                        summary: op.summary.clone(),
+                        body_schema,
+                        responses,
                     })
-                    .collect();
-
-                Some(CallbackOperation {
-                    method: m.to_string(),
-                    url_expression: url_expr.clone(),
-                    summary: op.summary.clone(),
-                    body_schema,
-                    responses,
                 })
-            }).collect::<Vec<_>>()
+                .collect::<Vec<_>>()
         })
         .collect();
 
@@ -104,9 +112,14 @@ pub fn list_all_callbacks(api: &openapiv3::OpenAPI) -> Vec<CallbackEntry> {
         };
 
         let methods: &[(&str, &Option<openapiv3::Operation>)] = &[
-            ("GET", &path_item.get), ("POST", &path_item.post), ("PUT", &path_item.put),
-            ("DELETE", &path_item.delete), ("PATCH", &path_item.patch),
-            ("HEAD", &path_item.head), ("OPTIONS", &path_item.options), ("TRACE", &path_item.trace),
+            ("GET", &path_item.get),
+            ("POST", &path_item.post),
+            ("PUT", &path_item.put),
+            ("DELETE", &path_item.delete),
+            ("PATCH", &path_item.patch),
+            ("HEAD", &path_item.head),
+            ("OPTIONS", &path_item.options),
+            ("TRACE", &path_item.trace),
         ];
 
         for &(method, op_opt) in methods {
@@ -123,9 +136,7 @@ pub fn list_all_callbacks(api: &openapiv3::OpenAPI) -> Vec<CallbackEntry> {
 /// Find a specific callback by name across all operations.
 /// Callback name matching is case-sensitive.
 pub fn find_callback(api: &openapiv3::OpenAPI, name: &str) -> Option<CallbackEntry> {
-    list_all_callbacks(api)
-        .into_iter()
-        .find(|e| e.name == name)
+    list_all_callbacks(api).into_iter().find(|e| e.name == name)
 }
 
 pub fn suggest_similar_callbacks<'a>(all: &'a [CallbackEntry], name: &str) -> Vec<&'a str> {
@@ -154,7 +165,11 @@ mod tests {
         let callbacks = list_all_callbacks(&api);
         let names: Vec<&str> = callbacks.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"onEvent"), "missing onEvent: {:?}", names);
-        assert!(names.contains(&"onStatusChange"), "missing onStatusChange: {:?}", names);
+        assert!(
+            names.contains(&"onStatusChange"),
+            "missing onStatusChange: {:?}",
+            names
+        );
     }
 
     #[test]

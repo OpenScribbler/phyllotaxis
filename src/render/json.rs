@@ -269,7 +269,11 @@ pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> Str
     serialize(&json, is_tty)
 }
 
-pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, bin_name: &str, is_tty: bool) -> String {
+pub fn render_schema_detail(
+    model: &crate::models::schema::SchemaModel,
+    bin_name: &str,
+    is_tty: bool,
+) -> String {
     use crate::models::schema::Composition;
 
     let composition = model.composition.as_ref().map(|c| match c {
@@ -333,7 +337,11 @@ pub fn render_schema_detail(model: &crate::models::schema::SchemaModel, bin_name
     serialize(&json, is_tty)
 }
 
-pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry], bin_name: &str, is_tty: bool) -> String {
+pub fn render_callback_list(
+    callbacks: &[crate::models::resource::CallbackEntry],
+    bin_name: &str,
+    is_tty: bool,
+) -> String {
     #[derive(serde::Serialize)]
     struct CallbackListJson<'a> {
         total: usize,
@@ -347,11 +355,14 @@ pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry]
         defined_on_path: &'a str,
     }
 
-    let items: Vec<_> = callbacks.iter().map(|cb| CallbackSummaryJson {
-        name: &cb.name,
-        defined_on_method: &cb.defined_on_method,
-        defined_on_path: &cb.defined_on_path,
-    }).collect();
+    let items: Vec<_> = callbacks
+        .iter()
+        .map(|cb| CallbackSummaryJson {
+            name: &cb.name,
+            defined_on_method: &cb.defined_on_method,
+            defined_on_path: &cb.defined_on_path,
+        })
+        .collect();
 
     let json = CallbackListJson {
         total: items.len(),
@@ -361,19 +372,34 @@ pub fn render_callback_list(callbacks: &[crate::models::resource::CallbackEntry]
     serialize(&json, is_tty)
 }
 
-pub fn render_callback_detail(cb: &crate::models::resource::CallbackEntry, _bin_name: &str, is_tty: bool) -> String {
+pub fn render_callback_detail(
+    cb: &crate::models::resource::CallbackEntry,
+    _bin_name: &str,
+    is_tty: bool,
+) -> String {
     serialize(cb, is_tty)
 }
 
-pub fn render_search(results: &crate::commands::search::SearchResults, _bin_name: &str, is_tty: bool) -> String {
+pub fn render_search(
+    results: &crate::commands::search::SearchResults,
+    _bin_name: &str,
+    is_tty: bool,
+) -> String {
     serialize(results, is_tty)
 }
 
-pub fn render_auth(model: &crate::commands::auth::AuthModel, _bin_name: &str, is_tty: bool) -> String {
+pub fn render_auth(
+    model: &crate::commands::auth::AuthModel,
+    _bin_name: &str,
+    is_tty: bool,
+) -> String {
     serialize(model, is_tty)
 }
 
-pub fn render_endpoint_detail(endpoint: &crate::models::resource::Endpoint, is_tty: bool) -> String {
+pub fn render_endpoint_detail(
+    endpoint: &crate::models::resource::Endpoint,
+    is_tty: bool,
+) -> String {
     // Endpoint already derives Serialize, so we can use it directly
     serialize(endpoint, is_tty)
 }
@@ -383,18 +409,17 @@ mod tests {
     use super::*;
 
     fn parse_json(s: &str) -> serde_json::Value {
-        serde_json::from_str(s).unwrap_or_else(|_| {
-            panic!("Invalid JSON: {}", &s[..200.min(s.len())])
-        })
+        serde_json::from_str(s)
+            .unwrap_or_else(|_| panic!("Invalid JSON: {}", &s[..200.min(s.len())]))
     }
 
     #[test]
     fn test_all_json_outputs_parse() {
-        use crate::commands::overview::OverviewData;
         use crate::commands::auth::{AuthModel, SecuritySchemeInfo};
+        use crate::commands::overview::OverviewData;
         use crate::commands::search::SearchResults;
-        use crate::models::schema::SchemaModel;
         use crate::models::resource::Endpoint;
+        use crate::models::schema::SchemaModel;
 
         // Overview
         let overview = OverviewData {
@@ -429,7 +454,11 @@ mod tests {
         assert_eq!(v["deprecated"], false);
 
         // Schema list
-        parse_json(&render_schema_list(&["Pet".to_string()], "phyllotaxis", false));
+        parse_json(&render_schema_list(
+            &["Pet".to_string()],
+            "phyllotaxis",
+            false,
+        ));
 
         // Schema detail
         let model = SchemaModel {
@@ -496,7 +525,10 @@ mod tests {
         let v = parse_json(&render_endpoint_detail(&endpoint, false));
         assert_eq!(v["method"], "GET");
         assert_eq!(v["is_deprecated"], false);
-        assert!(v["drill_deeper"].is_array(), "drill_deeper should be present as array");
+        assert!(
+            v["drill_deeper"].is_array(),
+            "drill_deeper should be present as array"
+        );
 
         // Schema with title (Task 20)
         let model_with_title = SchemaModel {
@@ -509,11 +541,18 @@ mod tests {
             external_docs: None,
             base_type: None,
         };
-        let v = parse_json(&render_schema_detail(&model_with_title, "phyllotaxis", false));
-        assert_eq!(v["title"], "Geographic Location", "JSON should include title");
+        let v = parse_json(&render_schema_detail(
+            &model_with_title,
+            "phyllotaxis",
+            false,
+        ));
+        assert_eq!(
+            v["title"], "Geographic Location",
+            "JSON should include title"
+        );
 
         // Field with new properties (Task 20)
-        use crate::models::resource::{RequestBody, Field};
+        use crate::models::resource::{Field, RequestBody};
         let endpoint_with_new_fields = Endpoint {
             method: "POST".to_string(),
             path: "/test".to_string(),
@@ -648,9 +687,18 @@ mod tests {
         };
 
         let v = parse_json(&render_endpoint_detail(&endpoint, false));
-        assert!(v["responses"][0]["headers"].is_array(), "headers should be array in JSON");
+        assert!(
+            v["responses"][0]["headers"].is_array(),
+            "headers should be array in JSON"
+        );
         assert_eq!(v["responses"][0]["headers"][0]["name"], "X-Total-Count");
-        assert!(v["callbacks"].is_array(), "callbacks should be present as array");
-        assert!(v.get("links").is_none(), "top-level links should not be serialized in JSON");
+        assert!(
+            v["callbacks"].is_array(),
+            "callbacks should be present as array"
+        );
+        assert!(
+            v.get("links").is_none(),
+            "top-level links should not be serialized in JSON"
+        );
     }
 }

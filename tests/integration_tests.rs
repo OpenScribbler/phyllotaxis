@@ -96,10 +96,7 @@ fn test_resources_endpoint_get() {
         stdout.contains("Query Parameters"),
         "Missing query parameters section"
     );
-    assert!(
-        stdout.contains("200"),
-        "Missing 200 response"
-    );
+    assert!(stdout.contains("200"), "Missing 200 response");
 }
 
 #[test]
@@ -157,10 +154,7 @@ fn test_schema_detail_pet() {
 fn test_schema_detail_expanded() {
     let (stdout, _stderr, code) = run_with_petstore(&["schemas", "Pet", "--expand"]);
     assert_eq!(code, 0);
-    assert!(
-        stdout.contains("(expanded)"),
-        "Missing expanded label"
-    );
+    assert!(stdout.contains("(expanded)"), "Missing expanded label");
     assert!(
         stdout.contains("Owner:"),
         "Owner's nested fields should appear after expansion"
@@ -171,11 +165,11 @@ fn test_schema_detail_expanded() {
 fn test_schema_allof() {
     let (stdout, _stderr, code) = run_with_petstore(&["schemas", "PetList"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("id"), "Expected id field from Pet via allOf");
     assert!(
-        stdout.contains("tags"),
-        "Expected tags field from PetList"
+        stdout.contains("id"),
+        "Expected id field from Pet via allOf"
     );
+    assert!(stdout.contains("tags"), "Expected tags field from PetList");
 }
 
 #[test]
@@ -210,10 +204,7 @@ fn test_auth() {
         stdout.contains("bearerAuth"),
         "Missing bearerAuth scheme name"
     );
-    assert!(
-        stdout.to_lowercase().contains("http"),
-        "Missing http type"
-    );
+    assert!(stdout.to_lowercase().contains("http"), "Missing http type");
     assert!(stdout.contains("bearer"), "Missing bearer detail");
 }
 
@@ -251,7 +242,8 @@ fn test_search_no_results() {
 
 #[test]
 fn test_endpoint_not_found() {
-    let (_stdout, stderr, code) = run_with_petstore(&["resources", "pets", "DELETE", "/nonexistent"]);
+    let (_stdout, stderr, code) =
+        run_with_petstore(&["resources", "pets", "DELETE", "/nonexistent"]);
     assert_eq!(code, 1, "Expected exit code 1 for endpoint not found");
     assert!(
         stderr.to_lowercase().contains("not found"),
@@ -263,7 +255,10 @@ fn test_endpoint_not_found() {
 #[test]
 fn test_method_without_path_errors() {
     let (_stdout, stderr, code) = run_with_petstore(&["resources", "pets", "GET"]);
-    assert_eq!(code, 1, "Expected exit code 1 when method provided without path");
+    assert_eq!(
+        code, 1,
+        "Expected exit code 1 when method provided without path"
+    );
     assert!(
         stderr.contains("Missing endpoint path"),
         "Expected 'Missing endpoint path' in stderr. Got: {}",
@@ -279,7 +274,10 @@ fn test_method_without_path_errors() {
 #[test]
 fn test_method_without_path_json_errors() {
     let (_stdout, stderr, code) = run_with_petstore(&["--json", "resources", "pets", "POST"]);
-    assert_eq!(code, 1, "Expected exit code 1 when method provided without path in JSON mode");
+    assert_eq!(
+        code, 1,
+        "Expected exit code 1 when method provided without path in JSON mode"
+    );
     let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|_| {
         panic!(
             "Expected stderr to be valid JSON. Got: {:?}",
@@ -374,7 +372,15 @@ fn test_json_flag_all_commands() {
         vec!["--spec", &spec, "--json"],
         vec!["--spec", &spec, "--json", "resources"],
         vec!["--spec", &spec, "--json", "resources", "pets"],
-        vec!["--spec", &spec, "--json", "resources", "pets", "GET", "/pets"],
+        vec![
+            "--spec",
+            &spec,
+            "--json",
+            "resources",
+            "pets",
+            "GET",
+            "/pets",
+        ],
         vec!["--spec", &spec, "--json", "schemas"],
         vec!["--spec", &spec, "--json", "schemas", "Pet"],
         vec!["--spec", &spec, "--json", "auth"],
@@ -390,7 +396,8 @@ fn test_json_flag_all_commands() {
         let code = output.status.code().unwrap_or(-1);
 
         assert_eq!(
-            code, 0,
+            code,
+            0,
             "Expected exit code 0 for {:?}. Stderr: {}",
             cmd_args,
             String::from_utf8_lossy(&output.stderr)
@@ -414,7 +421,8 @@ fn test_json_flag_all_commands() {
 fn test_json_error_is_structured() {
     // When --json is passed and a resource is not found, stderr must be valid JSON
     // with an "error" key — not a plain "Error: ..." string.
-    let (_stdout, stderr, code) = run_with_petstore(&["--json", "resources", "nonexistentresource"]);
+    let (_stdout, stderr, code) =
+        run_with_petstore(&["--json", "resources", "nonexistentresource"]);
     assert_eq!(code, 1, "Expected exit code 1 for not found");
 
     let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|_| {
@@ -491,7 +499,11 @@ fn test_no_color_env_plain_output() {
     let (stdout, _stderr, code) = run_with_petstore_env(&["resources"], &[("NO_COLOR", "1")]);
     assert_eq!(code, 0);
     // Resource names must still appear
-    assert!(stdout.contains("pets"), "Resource names must appear with NO_COLOR. Got: {}", &stdout[..200.min(stdout.len())]);
+    assert!(
+        stdout.contains("pets"),
+        "Resource names must appear with NO_COLOR. Got: {}",
+        &stdout[..200.min(stdout.len())]
+    );
     // No box-drawing separator lines
     assert!(
         !has_decorator_lines(&stdout),
@@ -510,7 +522,11 @@ fn test_no_color_env_plain_output() {
 fn test_term_dumb_plain_output() {
     let (stdout, _stderr, code) = run_with_petstore_env(&["resources"], &[("TERM", "dumb")]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("pets"), "Resource names must appear with TERM=dumb. Got: {}", &stdout[..200.min(stdout.len())]);
+    assert!(
+        stdout.contains("pets"),
+        "Resource names must appear with TERM=dumb. Got: {}",
+        &stdout[..200.min(stdout.len())]
+    );
     assert!(
         !has_decorator_lines(&stdout),
         "TERM=dumb must suppress decorative separator lines. Got:\n{}",
@@ -529,7 +545,11 @@ fn test_piped_output_plain() {
     // run_with_petstore already captures output (non-TTY), so we just assert plain format.
     let (stdout, _stderr, code) = run_with_petstore(&["resources"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("pets"), "Resource names must appear in piped output. Got: {}", &stdout[..200.min(stdout.len())]);
+    assert!(
+        stdout.contains("pets"),
+        "Resource names must appear in piped output. Got: {}",
+        &stdout[..200.min(stdout.len())]
+    );
     assert!(
         !has_decorator_lines(&stdout),
         "Piped (non-TTY) output must not contain decorative separator lines. Got:\n{}",
@@ -642,7 +662,10 @@ fn test_non_tty_no_unicode_arrow_in_discriminator() {
 fn test_completions_bash() {
     let (stdout, _stderr, code) = run(&["completions", "bash"]);
     assert_eq!(code, 0, "Expected exit code 0 for bash completions");
-    assert!(!stdout.is_empty(), "Bash completion output must not be empty");
+    assert!(
+        !stdout.is_empty(),
+        "Bash completion output must not be empty"
+    );
     assert!(
         stdout.contains("phyllotaxis"),
         "Bash completion script must reference the binary name. Got: {}",
@@ -654,7 +677,10 @@ fn test_completions_bash() {
 fn test_completions_zsh() {
     let (stdout, _stderr, code) = run(&["completions", "zsh"]);
     assert_eq!(code, 0, "Expected exit code 0 for zsh completions");
-    assert!(!stdout.is_empty(), "Zsh completion output must not be empty");
+    assert!(
+        !stdout.is_empty(),
+        "Zsh completion output must not be empty"
+    );
     assert!(
         stdout.contains("phyllotaxis"),
         "Zsh completion script must reference the binary name. Got: {}",
@@ -666,7 +692,10 @@ fn test_completions_zsh() {
 fn test_completions_fish() {
     let (stdout, _stderr, code) = run(&["completions", "fish"]);
     assert_eq!(code, 0, "Expected exit code 0 for fish completions");
-    assert!(!stdout.is_empty(), "Fish completion output must not be empty");
+    assert!(
+        !stdout.is_empty(),
+        "Fish completion output must not be empty"
+    );
     assert!(
         stdout.contains("phyllotaxis"),
         "Fish completion script must reference the binary name. Got: {}",
@@ -688,10 +717,19 @@ fn run_with_kitchen_sink(args: &[&str]) -> (String, String, i32) {
 // Success criterion 1: Non-JSON request bodies (multipart/form-data)
 #[test]
 fn test_multipart_body_visible_in_upload_endpoint() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "files", "POST", "/files/upload"]);
+    let (stdout, _stderr, code) =
+        run_with_kitchen_sink(&["resources", "files", "POST", "/files/upload"]);
     assert_eq!(code, 0, "Expected exit code 0");
-    assert!(stdout.contains("multipart/form-data"), "Missing content type, got:\n{}", &stdout[..300.min(stdout.len())]);
-    assert!(stdout.contains("file"), "Missing file field, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(
+        stdout.contains("multipart/form-data"),
+        "Missing content type, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
+    assert!(
+        stdout.contains("file"),
+        "Missing file field, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
 }
 
 // Success criterion 2: Response headers
@@ -699,7 +737,11 @@ fn test_multipart_body_visible_in_upload_endpoint() {
 fn test_response_headers_visible() {
     let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "users", "GET", "/users"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("X-Total-Count"), "Missing response header, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(
+        stdout.contains("X-Total-Count"),
+        "Missing response header, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
 }
 
 // Success criterion 3: Callbacks list
@@ -708,7 +750,10 @@ fn test_callbacks_list_kitchen_sink() {
     let (stdout, _stderr, code) = run_with_kitchen_sink(&["callbacks"]);
     assert_eq!(code, 0, "Expected exit code 0");
     assert!(stdout.contains("onEvent"), "Missing onEvent callback");
-    assert!(stdout.contains("onStatusChange"), "Missing onStatusChange callback");
+    assert!(
+        stdout.contains("onStatusChange"),
+        "Missing onStatusChange callback"
+    );
 }
 
 // Success criterion 4: Callback detail
@@ -732,7 +777,11 @@ fn test_callbacks_not_found() {
 fn test_links_visible_on_post_users() {
     let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "users", "POST", "/users"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("GetCreatedUser"), "Missing link, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(
+        stdout.contains("GetCreatedUser"),
+        "Missing link, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
 }
 
 // Success criterion 6: Schema constraints
@@ -740,8 +789,16 @@ fn test_links_visible_on_post_users() {
 fn test_schema_constraints_visible() {
     let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "User"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("min:3"), "Missing min constraint, got:\n{}", &stdout[..300.min(stdout.len())]);
-    assert!(stdout.contains("max:32"), "Missing max constraint, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(
+        stdout.contains("min:3"),
+        "Missing min constraint, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
+    assert!(
+        stdout.contains("max:32"),
+        "Missing max constraint, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
 }
 
 // Success criterion 7: writeOnly
@@ -749,7 +806,11 @@ fn test_schema_constraints_visible() {
 fn test_write_only_visible_on_create_user_request() {
     let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "CreateUserRequest"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("write-only"), "Missing write-only on password field, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(
+        stdout.contains("write-only"),
+        "Missing write-only on password field, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
 }
 
 // Success criterion 8: deprecated
@@ -757,7 +818,11 @@ fn test_write_only_visible_on_create_user_request() {
 fn test_deprecated_visible_on_pet_base() {
     let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "PetBase"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("DEPRECATED"), "Missing DEPRECATED on legacy_code, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(
+        stdout.contains("DEPRECATED"),
+        "Missing DEPRECATED on legacy_code, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
 }
 
 // Success criterion 9: Schema title
@@ -765,7 +830,11 @@ fn test_deprecated_visible_on_pet_base() {
 fn test_schema_title_visible() {
     let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "GeoLocation"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("Geographic Location"), "Missing title, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(
+        stdout.contains("Geographic Location"),
+        "Missing title, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
 }
 
 // Success criterion 10: Integer enums
@@ -773,15 +842,24 @@ fn test_schema_title_visible() {
 fn test_integer_enum_visible() {
     let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "Priority"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains('0'), "Missing integer enum value, got:\n{}", &stdout[..300.min(stdout.len())]);
-    assert!(stdout.contains('4'), "Missing integer enum value 4, got:\n{}", &stdout[..300.min(stdout.len())]);
+    assert!(
+        stdout.contains('0'),
+        "Missing integer enum value, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
+    assert!(
+        stdout.contains('4'),
+        "Missing integer enum value 4, got:\n{}",
+        &stdout[..300.min(stdout.len())]
+    );
 }
 
 // ─── Review Fixes ───
 
 #[test]
 fn test_empty_request_body_shows_raw_body_message() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "admin", "POST", "/admin/bulk-import"]);
+    let (stdout, _stderr, code) =
+        run_with_kitchen_sink(&["resources", "admin", "POST", "/admin/bulk-import"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Raw body (no schema)"),
@@ -809,7 +887,8 @@ fn test_exclusive_min_max_shows_operators() {
 
 #[test]
 fn test_array_item_type_propagation() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "files", "POST", "/files/upload-batch"]);
+    let (stdout, _stderr, code) =
+        run_with_kitchen_sink(&["resources", "files", "POST", "/files/upload-batch"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("binary[]"),
@@ -820,13 +899,15 @@ fn test_array_item_type_propagation() {
 
 #[test]
 fn test_no_trailing_whitespace_on_empty_header_description() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "health", "HEAD", "/health"]);
+    let (stdout, _stderr, code) =
+        run_with_kitchen_sink(&["resources", "health", "HEAD", "/health"]);
     assert_eq!(code, 0);
     // Find the X-Health-Status line and check for trailing whitespace
     for line in stdout.lines() {
         if line.contains("X-Health-Status") {
             assert_eq!(
-                line, line.trim_end(),
+                line,
+                line.trim_end(),
                 "Header line should not have trailing whitespace"
             );
         }
@@ -835,7 +916,8 @@ fn test_no_trailing_whitespace_on_empty_header_description() {
 
 #[test]
 fn test_json_no_top_level_links() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--json", "resources", "users", "POST", "/users"]);
+    let (stdout, _stderr, code) =
+        run_with_kitchen_sink(&["--json", "resources", "users", "POST", "/users"]);
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|_| panic!("Invalid JSON: {}", &stdout[..200.min(stdout.len())]));
@@ -847,9 +929,14 @@ fn test_json_no_top_level_links() {
     // But links should still exist on individual responses
     let responses = json.get("responses").expect("responses should exist");
     let has_response_links = responses.as_array().unwrap().iter().any(|r| {
-        r.get("links").map(|l| l.as_array().map(|a| !a.is_empty()).unwrap_or(false)).unwrap_or(false)
+        r.get("links")
+            .map(|l| l.as_array().map(|a| !a.is_empty()).unwrap_or(false))
+            .unwrap_or(false)
     });
-    assert!(has_response_links, "Links should still appear on individual responses");
+    assert!(
+        has_response_links,
+        "Links should still appear on individual responses"
+    );
 }
 
 #[test]
@@ -865,7 +952,8 @@ fn test_callback_list_shows_operation_count() {
 
 #[test]
 fn test_expand_on_endpoint_shows_nested_fields() {
-    let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets", "POST", "/pets", "--expand"]);
+    let (stdout, _stderr, code) =
+        run_with_petstore(&["resources", "pets", "POST", "/pets", "--expand"]);
     assert_eq!(code, 0);
     // With --expand, the owner field should show its nested fields (id, name)
     assert!(
@@ -918,5 +1006,8 @@ fn test_overview_shows_callback_count() {
 fn test_petstore_regression() {
     let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets", "POST", "/pets"]);
     assert_eq!(code, 0, "Petstore regression: POST /pets should still work");
-    assert!(stdout.contains("Request Body"), "Regression: missing request body");
+    assert!(
+        stdout.contains("Request Body"),
+        "Regression: missing request body"
+    );
 }

@@ -225,7 +225,6 @@ pub fn is_alpha_tag(tag_name: &str) -> bool {
     tag_name.to_lowercase().contains("(alpha)")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,14 +276,26 @@ mod tests {
 
     #[test]
     fn test_humanize_pascal_case() {
-        assert_eq!(humanize_tag_name("DiscoveryIntegration"), "Discovery Integration");
-        assert_eq!(humanize_tag_name("CredentialProvider"), "Credential Provider");
-        assert_eq!(humanize_tag_name("PascalCaseResource"), "Pascal Case Resource");
+        assert_eq!(
+            humanize_tag_name("DiscoveryIntegration"),
+            "Discovery Integration"
+        );
+        assert_eq!(
+            humanize_tag_name("CredentialProvider"),
+            "Credential Provider"
+        );
+        assert_eq!(
+            humanize_tag_name("PascalCaseResource"),
+            "Pascal Case Resource"
+        );
     }
 
     #[test]
     fn test_humanize_already_spaced() {
-        assert_eq!(humanize_tag_name("Credential Provider v2"), "Credential Provider v2");
+        assert_eq!(
+            humanize_tag_name("Credential Provider v2"),
+            "Credential Provider v2"
+        );
         assert_eq!(humanize_tag_name("Access Policies"), "Access Policies");
     }
 
