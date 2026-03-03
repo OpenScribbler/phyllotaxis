@@ -11,3 +11,6 @@ tests/fixtures/twilio.yaml
 
 # Local config
 .phyllotaxis.yaml
+
+# Release guard sentinel (do not commit)
+.release-pending.yml

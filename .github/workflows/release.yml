@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Check tag matches Cargo.toml version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "Tag version:   $TAG_VERSION"
+          echo "Cargo version: $CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+
+  build:
+    name: Build - ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            archive: phyllotaxis-x86_64-unknown-linux-gnu.tar.gz
+            archive_cmd: tar
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            archive: phyllotaxis-aarch64-unknown-linux-gnu.tar.gz
+            archive_cmd: tar
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            archive: phyllotaxis-x86_64-apple-darwin.tar.gz
+            archive_cmd: tar
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            archive: phyllotaxis-aarch64-apple-darwin.tar.gz
+            archive_cmd: tar
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            archive: phyllotaxis-x86_64-pc-windows-msvc.zip
+            archive_cmd: zip
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Linux/macOS)
+        if: matrix.archive_cmd == 'tar'
+        run: |
+          tar -czf ${{ matrix.archive }} \
+            -C target/${{ matrix.target }}/release \
+            phyllotaxis phyll
+
+      - name: Package (Windows)
+        if: matrix.archive_cmd == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path `
+            "target/${{ matrix.target }}/release/phyllotaxis.exe", `
+            "target/${{ matrix.target }}/release/phyll.exe" `
+            -DestinationPath "${{ matrix.archive }}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ matrix.archive }}
+
+  release:
+    name: Create release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          sha256sum phyllotaxis-*.tar.gz phyllotaxis-*.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Prepare release notes
+        id: notes
+        run: |
+          NOTES_FILE="releases/${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            echo "notes_file=$NOTES_FILE" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release (with release notes)
+        if: steps.notes.outputs.notes_file != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$NOTES_FILE" \
+            phyllotaxis-*.tar.gz phyllotaxis-*.zip \
+            checksums.txt
+
+      - name: Create GitHub Release (auto-generated notes)
+        if: steps.notes.outputs.notes_file == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            phyllotaxis-*.tar.gz phyllotaxis-*.zip \
+            checksums.txt
