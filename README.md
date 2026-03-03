@@ -1,6 +1,6 @@
 <div align="center">
 
-```
+<pre>
 ▄▄▄▄▄▄▄   ▄▄          ▄▄ ▄▄
 ███▀▀███▄ ██          ██ ██        ██              ▀▀
 ███▄▄███▀ ████▄ ██ ██ ██ ██ ▄███▄ ▀██▀▀ ▀▀█▄ ██ ██ ██  ▄█▀▀▀
@@ -8,7 +8,7 @@
 ███       ██ ██  ▀██▀ ██ ██ ▀███▀  ██  ▀█▄██ ██ ██ ██▄ ▄▄▄█▀
                   ██
                 ▀▀▀
-```
+</pre>
 
 </div>
 A CLI that lets you explore OpenAPI specs one layer at a time instead of reading the whole thing. Start with an overview, pick a resource, drill into an endpoint, check a schema. You (or an LLM) only see what you actually need.
