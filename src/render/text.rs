@@ -1015,7 +1015,10 @@ pub fn render_search(
         counts.push(format!("{} callback(s)", results.callbacks.len()));
     }
     if !results.security_schemes.is_empty() {
-        counts.push(format!("{} security scheme(s)", results.security_schemes.len()));
+        counts.push(format!(
+            "{} security scheme(s)",
+            results.security_schemes.len()
+        ));
     }
     writeln!(out, "Found {}", counts.join(", ")).unwrap();
 
@@ -1374,9 +1377,7 @@ pub fn render_schema_usage(
     out.push('\n');
 
     if usages.is_empty() {
-        out.push_str(
-            "  Not found in any endpoint request bodies, responses, or parameters.\n",
-        );
+        out.push_str("  Not found in any endpoint request bodies, responses, or parameters.\n");
         return out;
     }
 
@@ -1443,7 +1444,12 @@ pub fn render_schema_usage(
 
 pub fn render_example(schema_name: &str, example: &serde_json::Value, _is_tty: bool) -> String {
     let mut out = String::new();
-    writeln!(out, "Example ({}, required fields, auto-generated):", sanitize(schema_name)).unwrap();
+    writeln!(
+        out,
+        "Example ({}, required fields, auto-generated):",
+        sanitize(schema_name)
+    )
+    .unwrap();
     // Pretty-print JSON with 2-space indent
     out.push_str(&serde_json::to_string_pretty(example).unwrap_or_else(|_| "{}".to_string()));
     out.push('\n');
@@ -1833,10 +1839,7 @@ mod tests {
 
         let output = render_schema_detail(&model, "phyllotaxis", false, None, true);
         assert!(output.contains("oneOf"), "Missing oneOf");
-        assert!(
-            output.contains("phyll schemas Pet"),
-            "Missing Pet variant"
-        );
+        assert!(output.contains("phyll schemas Pet"), "Missing Pet variant");
         assert!(
             output.contains("phyll schemas Owner"),
             "Missing Owner variant"
@@ -2380,9 +2383,7 @@ mod tests {
                     operation_id: "getUser".to_string(),
                     parameters: vec!["userId = $response.body#/id".to_string()],
                     description: None,
-                    drill_command: Some(
-                        "phyll resources users GET /users/{userId}".to_string(),
-                    ),
+                    drill_command: Some("phyll resources users GET /users/{userId}".to_string()),
                 }],
                 fields: vec![],
             }],

@@ -700,7 +700,7 @@ fn extract_links_from_response(
 fn build_link_drill_command(
     api: &openapiv3::OpenAPI,
     operation_id: &str,
-    _bin_name: &str,
+    bin_name: &str,
 ) -> Option<String> {
     for (path_str, path_item_ref) in &api.paths.paths {
         let path_item = match path_item_ref {
@@ -713,6 +713,9 @@ fn build_link_drill_command(
             ("PUT", &path_item.put),
             ("DELETE", &path_item.delete),
             ("PATCH", &path_item.patch),
+            ("HEAD", &path_item.head),
+            ("OPTIONS", &path_item.options),
+            ("TRACE", &path_item.trace),
         ];
         for &(method, op_opt) in methods {
             if let Some(op) = op_opt {
@@ -720,8 +723,8 @@ fn build_link_drill_command(
                     let slug = op.tags.first().map(|t| crate::models::resource::slugify(t));
                     if let Some(slug) = slug {
                         return Some(format!(
-                            "phyll resources {} {} {}",
-                            slug, method, path_str
+                            "{} resources {} {} {}",
+                            bin_name, slug, method, path_str
                         ));
                     }
                 }
@@ -1075,7 +1078,9 @@ fn merge_parameters(
             openapiv3::Parameter::Header { parameter_data, .. } => {
                 (parameter_data, ParameterLocation::Header)
             }
-            _ => continue,
+            openapiv3::Parameter::Cookie { parameter_data, .. } => {
+                (parameter_data, ParameterLocation::Cookie)
+            }
         };
 
         let (pdata, location) = data;
@@ -1384,12 +1389,19 @@ fn extract_param_schema_info(
 
 pub fn suggest_similar<'a>(groups: &'a [ResourceGroup], slug: &str) -> Vec<&'a str> {
     let slug_lower = slug.to_lowercase();
-    groups
+    let mut matches: Vec<_> = groups
         .iter()
-        .filter(|g| strsim::jaro_winkler(&slug_lower, &g.slug.to_lowercase()) > 0.8)
-        .take(3)
-        .map(|g| g.slug.as_str())
-        .collect()
+        .filter_map(|g| {
+            let score = strsim::jaro_winkler(&slug_lower, &g.slug.to_lowercase());
+            if score > 0.8 {
+                Some((g.slug.as_str(), score))
+            } else {
+                None
+            }
+        })
+        .collect();
+    matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    matches.into_iter().take(3).map(|(name, _)| name).collect()
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1544,8 +1556,8 @@ fn collect_nested_schema_names(
         // Array with $ref items: resolve the item schema and recurse into it
         openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) => {
             if let Some(openapiv3::ReferenceOr::Reference { reference }) = arr.items.as_ref() {
-                if let Some(item_schema) = crate::spec::schema_name_from_ref(reference)
-                    .and_then(|sname| {
+                if let Some(item_schema) =
+                    crate::spec::schema_name_from_ref(reference).and_then(|sname| {
                         api.components
                             .as_ref()
                             .and_then(|c| c.schemas.get(sname))
@@ -1619,8 +1631,7 @@ fn collect_field_schema_refs(
             }
             openapiv3::ReferenceOr::Item(boxed) => {
                 // Check for array-of-ref fields: type: array, items: { $ref: ... }
-                if let openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) =
-                    &boxed.schema_kind
+                if let openapiv3::SchemaKind::Type(openapiv3::Type::Array(arr)) = &boxed.schema_kind
                 {
                     if let Some(openapiv3::ReferenceOr::Reference { reference }) =
                         arr.items.as_ref()
@@ -1636,7 +1647,6 @@ fn collect_field_schema_refs(
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2173,8 +2183,7 @@ mod tests {
         let api = load_petstore();
         let ep = get_endpoint_detail(&api, "GET", "/pets/{id}", false, "phyllotaxis").unwrap();
         assert!(
-            ep.drill_deeper
-                .contains(&"phyll schemas Pet".to_string()),
+            ep.drill_deeper.contains(&"phyll schemas Pet".to_string()),
             "GET /pets/{{petId}} 200 response should yield drill_deeper for Pet, got: {:?}",
             ep.drill_deeper
         );
@@ -2186,8 +2195,7 @@ mod tests {
         let ep = get_endpoint_detail(&api, "POST", "/pets", false, "phyllotaxis").unwrap();
         // POST /pets has 201 → Pet, 400 → no schema, 409 → no schema
         assert!(
-            ep.drill_deeper
-                .contains(&"phyll schemas Pet".to_string()),
+            ep.drill_deeper.contains(&"phyll schemas Pet".to_string()),
             "Should include Pet from 201 response"
         );
         // Error responses should not contribute extra entries
@@ -2429,7 +2437,7 @@ mod tests {
         assert!(
             link.drill_command
                 .as_ref()
-                .map(|c| c.contains("phyll resources"))
+                .map(|c| c.contains("phyllotaxis resources"))
                 .unwrap_or(false),
             "Expected drill command, got: {:?}",
             link.drill_command
@@ -2684,8 +2692,7 @@ paths:
             .unwrap();
 
         assert!(
-            ep.drill_deeper
-                .contains(&"phyll schemas User".to_string()),
+            ep.drill_deeper.contains(&"phyll schemas User".to_string()),
             "Missing drill_deeper for User: {:?}",
             ep.drill_deeper
         );

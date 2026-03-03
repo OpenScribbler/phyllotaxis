@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 struct Framework {
@@ -152,10 +153,12 @@ pub fn find_spec_candidates(dir: &Path, framework: Option<&str>) -> Vec<PathBuf>
                 if seen.contains(&canonical) {
                     continue;
                 }
-                // Check first 200 bytes for "openapi"
-                if let Ok(data) = std::fs::read(&path) {
-                    let check = &data[..data.len().min(200)];
-                    let snippet = String::from_utf8_lossy(check);
+                // Check first 200 bytes for "openapi" (bounded read)
+                if let Ok(mut file) = std::fs::File::open(&path) {
+                    use std::io::Read;
+                    let mut buf = [0u8; 200];
+                    let n = file.read(&mut buf).unwrap_or(0);
+                    let snippet = String::from_utf8_lossy(&buf[..n]);
                     if snippet.contains("openapi") {
                         seen.insert(canonical);
                         results.push(path);
@@ -168,7 +171,7 @@ pub fn find_spec_candidates(dir: &Path, framework: Option<&str>) -> Vec<PathBuf>
     results
 }
 
-pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) {
+pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) -> anyhow::Result<()> {
     let config_path = start_dir.join(".phyllotaxis.yaml");
 
     // Non-interactive mode: --spec-path was provided, skip all prompts.
@@ -180,21 +183,21 @@ pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) {
         };
 
         if !resolved.exists() {
-            eprintln!("Error: spec file not found: {}", resolved.display());
-            std::process::exit(1);
+            anyhow::bail!("spec file not found: {}", resolved.display());
         }
 
         // Store the path as given (relative stays relative, absolute stays absolute).
         let stored = path.display().to_string();
-        write_init_config(&config_path, &stored).expect("failed to write .phyllotaxis.yaml");
+        write_init_config(&config_path, &stored)
+            .with_context(|| "failed to write .phyllotaxis.yaml")?;
         eprintln!("Initialized. Run `phyllotaxis` to see your API overview.");
-        return;
+        return Ok(());
     }
 
-    // Interactive mode (unchanged).
+    // Interactive mode — errors here are printed directly since we're in a prompt flow.
     if config_path.exists() {
         run_add_spec(start_dir, &config_path);
-        return;
+        return Ok(());
     }
 
     let framework = detect_framework(start_dir);
@@ -218,9 +221,10 @@ pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) {
     }
 
     let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .expect("failed to read input");
+    if let Err(e) = std::io::stdin().read_line(&mut input) {
+        eprintln!("Error: failed to read input: {}", e);
+        return Ok(());
+    }
     let input = input.trim();
 
     let selected = if let Ok(num) = input.parse::<usize>() {
@@ -240,9 +244,13 @@ pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) {
         .display()
         .to_string();
 
-    write_init_config(&config_path, &relative).expect("failed to write .phyllotaxis.yaml");
+    if let Err(e) = write_init_config(&config_path, &relative) {
+        eprintln!("Error: failed to write .phyllotaxis.yaml: {}", e);
+        return Ok(());
+    }
 
     eprintln!("Initialized. Run `phyllotaxis` to see your API overview.");
+    Ok(())
 }
 
 /// Called when a config already exists. Prompts to add another named spec.
@@ -251,9 +259,10 @@ fn run_add_spec(start_dir: &Path, config_path: &Path) {
     eprint!("Add another spec? Enter a name for the new spec (or press Enter to cancel): ");
 
     let mut name_input = String::new();
-    std::io::stdin()
-        .read_line(&mut name_input)
-        .expect("failed to read input");
+    if let Err(e) = std::io::stdin().read_line(&mut name_input) {
+        eprintln!("Error: failed to read input: {}", e);
+        return;
+    }
     let name = name_input.trim();
 
     if name.is_empty() {
@@ -276,9 +285,10 @@ fn run_add_spec(start_dir: &Path, config_path: &Path) {
     }
 
     let mut path_input = String::new();
-    std::io::stdin()
-        .read_line(&mut path_input)
-        .expect("failed to read input");
+    if let Err(e) = std::io::stdin().read_line(&mut path_input) {
+        eprintln!("Error: failed to read input: {}", e);
+        return;
+    }
     let path_input = path_input.trim();
 
     let selected = if let Ok(num) = path_input.parse::<usize>() {

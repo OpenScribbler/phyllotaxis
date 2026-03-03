@@ -155,8 +155,12 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
                     .map(|d| d.to_lowercase().contains(&term_lower))
                     .unwrap_or(false);
 
-                if path_match || summary_match || op_desc_match || param_match
-                    || matched_response_desc || matched_request_body_desc
+                if path_match
+                    || summary_match
+                    || op_desc_match
+                    || param_match
+                    || matched_response_desc
+                    || matched_request_body_desc
                 {
                     let resource_slug = op
                         .tags
@@ -166,25 +170,41 @@ pub fn search(api: &openapiv3::OpenAPI, term: &str) -> SearchResults {
                         .unwrap_or_default();
 
                     // Annotate matched_on only for non-primary match sources
-                    let matched_on =
-                        if param_match && !path_match && !summary_match && !op_desc_match
-                            && !matched_response_desc && !matched_request_body_desc {
-                            matched_param_name.map(|n| format!("parameter: {}", n))
-                        } else if matched_response_desc
-                            && !path_match && !summary_match && !op_desc_match && !param_match
-                            && !matched_request_body_desc {
-                            Some("response description".to_string())
-                        } else if matched_request_body_desc
-                            && !path_match && !summary_match && !op_desc_match && !param_match
-                            && !matched_response_desc {
-                            Some("request body description".to_string())
-                        } else if op_desc_match
-                            && !path_match && !summary_match && !param_match
-                            && !matched_response_desc && !matched_request_body_desc {
-                            Some("description".to_string())
-                        } else {
-                            None
-                        };
+                    let matched_on = if param_match
+                        && !path_match
+                        && !summary_match
+                        && !op_desc_match
+                        && !matched_response_desc
+                        && !matched_request_body_desc
+                    {
+                        matched_param_name.map(|n| format!("parameter: {}", n))
+                    } else if matched_response_desc
+                        && !path_match
+                        && !summary_match
+                        && !op_desc_match
+                        && !param_match
+                        && !matched_request_body_desc
+                    {
+                        Some("response description".to_string())
+                    } else if matched_request_body_desc
+                        && !path_match
+                        && !summary_match
+                        && !op_desc_match
+                        && !param_match
+                        && !matched_response_desc
+                    {
+                        Some("request body description".to_string())
+                    } else if op_desc_match
+                        && !path_match
+                        && !summary_match
+                        && !param_match
+                        && !matched_response_desc
+                        && !matched_request_body_desc
+                    {
+                        Some("description".to_string())
+                    } else {
+                        None
+                    };
 
                     endpoints.push(EndpointMatch {
                         method: method.to_string(),

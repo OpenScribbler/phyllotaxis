@@ -160,7 +160,7 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, is_tty: bool) -> Str
     serialize(&json, is_tty)
 }
 
-pub fn render_resource_list(groups: &[ResourceGroup], _bin_name: &str, is_tty: bool) -> String {
+pub fn render_resource_list(groups: &[ResourceGroup], bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct ResourceListJson {
         resources: Vec<ResourceItemJson>,
@@ -191,13 +191,13 @@ pub fn render_resource_list(groups: &[ResourceGroup], _bin_name: &str, is_tty: b
 
     let json = ResourceListJson {
         resources,
-        drill_deeper: "phyll resources <name>".to_string(),
+        drill_deeper: format!("{} resources <name>", bin_name),
     };
 
     serialize(&json, is_tty)
 }
 
-pub fn render_resource_detail(group: &ResourceGroup, _bin_name: &str, is_tty: bool) -> String {
+pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct ResourceDetailJson<'a> {
         slug: &'a str,
@@ -235,8 +235,8 @@ pub fn render_resource_detail(group: &ResourceGroup, _bin_name: &str, is_tty: bo
         .iter()
         .map(|e| {
             format!(
-                "phyll resources {} {} {}",
-                group.slug, e.method, e.path
+                "{} resources {} {} {}",
+                bin_name, group.slug, e.method, e.path
             )
         })
         .collect();
@@ -254,7 +254,7 @@ pub fn render_resource_detail(group: &ResourceGroup, _bin_name: &str, is_tty: bo
     serialize(&json, is_tty)
 }
 
-pub fn render_schema_list(names: &[String], _bin_name: &str, is_tty: bool) -> String {
+pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> String {
     #[derive(serde::Serialize)]
     struct SchemaListJson<'a> {
         schemas: &'a [String],
@@ -265,7 +265,7 @@ pub fn render_schema_list(names: &[String], _bin_name: &str, is_tty: bool) -> St
     let json = SchemaListJson {
         total: names.len(),
         schemas: names,
-        drill_deeper: "phyll schemas <name>".to_string(),
+        drill_deeper: format!("{} schemas <name>", bin_name),
     };
 
     serialize(&json, is_tty)
@@ -273,7 +273,7 @@ pub fn render_schema_list(names: &[String], _bin_name: &str, is_tty: bool) -> St
 
 pub fn render_schema_detail(
     model: &crate::models::schema::SchemaModel,
-    _bin_name: &str,
+    bin_name: &str,
     is_tty: bool,
 ) -> String {
     use crate::models::schema::Composition;
@@ -317,7 +317,7 @@ pub fn render_schema_detail(
             .iter()
             .filter_map(|f| f.nested_schema_name.as_ref())
             .filter(|name| seen.insert(name.to_string()))
-            .map(|name| format!("phyll schemas {}", name))
+            .map(|name| format!("{} schemas {}", bin_name, name))
             .collect()
     };
 
@@ -341,7 +341,7 @@ pub fn render_schema_detail(
 
 pub fn render_callback_list(
     callbacks: &[crate::models::resource::CallbackEntry],
-    _bin_name: &str,
+    bin_name: &str,
     is_tty: bool,
 ) -> String {
     #[derive(serde::Serialize)]
@@ -369,7 +369,7 @@ pub fn render_callback_list(
     let json = CallbackListJson {
         total: items.len(),
         callbacks: items,
-        drill_deeper: "phyll callbacks <name>".to_string(),
+        drill_deeper: format!("{} callbacks <name>", bin_name),
     };
     serialize(&json, is_tty)
 }
@@ -414,7 +414,12 @@ pub fn render_related_schemas(
     struct RelatedJson<'a> {
         related_schemas: &'a [crate::commands::resources::RelatedSchema],
     }
-    serialize(&RelatedJson { related_schemas: schemas }, is_tty)
+    serialize(
+        &RelatedJson {
+            related_schemas: schemas,
+        },
+        is_tty,
+    )
 }
 
 pub fn render_schema_usage(
