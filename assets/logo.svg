@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="170" viewBox="0 0 660 170">
+  <rect width="660" height="170" rx="8" fill="#0d1117"/>
+  <text font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="16" fill="#e6edf3" xml:space="preserve">
+    <tspan x="24" y="30">▄▄▄▄▄▄▄   ▄▄          ▄▄ ▄▄</tspan>
+    <tspan x="24" y="50">███▀▀███▄ ██          ██ ██        ██              ▀▀</tspan>
+    <tspan x="24" y="70">███▄▄███▀ ████▄ ██ ██ ██ ██ ▄███▄ ▀██▀▀ ▀▀█▄ ██ ██ ██  ▄█▀▀▀</tspan>
+    <tspan x="24" y="90">███▀▀▀▀   ██ ██ ██▄██ ██ ██ ██ ██  ██  ▄█▀██  ███  ██  ▀███▄</tspan>
+    <tspan x="24" y="110">███       ██ ██  ▀██▀ ██ ██ ▀███▀  ██  ▀█▄██ ██ ██ ██▄ ▄▄▄█▀</tspan>
+    <tspan x="24" y="130">                  ██</tspan>
+    <tspan x="24" y="150">                ▀▀▀</tspan>
+  </text>
+</svg>
