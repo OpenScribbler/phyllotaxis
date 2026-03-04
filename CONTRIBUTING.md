@@ -1,35 +1,34 @@
-# Contributing
+# Contributing to phyllotaxis
 
-Contributions are welcome! Here's how to get started.
+Thank you for wanting to contribute. phyllotaxis has a contribution model built around one core idea: **your thinking is the contribution**.
 
-## Development Setup
+## How contributions work
 
-```bash
-git clone https://github.com/OpenScribbler/phyllotaxis.git
-cd phyllotaxis
-cargo build
-cargo test
-```
+phyllotaxis accepts **ideas, not code**. You don't need to write a single line to make a meaningful contribution.
 
-## Before Submitting a PR
+When you open an issue, you'll be guided through a structured set of questions depending on what you're bringing:
 
-All four CI gates must pass:
+- **Bug Report** — Something isn't working the way it should
+- **Feature Idea** — Something that should exist but doesn't yet
+- **Improvement** — Something that works but could be better
 
-```bash
-cargo test --locked
-cargo clippy --locked -- -D warnings
-cargo fmt --check
-cargo deny check
-```
+Each template walks you through the right questions. Just follow the prompts.
 
-## Reporting Bugs
+## What we're looking for
 
-Open an issue on [GitHub Issues](https://github.com/OpenScribbler/phyllotaxis/issues) with:
-- The command you ran
-- What you expected
-- What happened instead
-- Your spec file (or a minimal reproduction) if possible
+- **Describe the what and why.** What's the problem, gap, or opportunity? Why does it matter?
+- **Explain the how in your own words.** If you have ideas about how something should work or change, walk us through your thinking. Explain it like you're talking to a teammate.
+- **No code.** Don't paste snippets, diffs, or implementations. Your description is the contribution — we'll handle the build.
 
-## Feature Requests
+## Why no code?
 
-Open an issue describing the use case. Explaining *why* you need something helps more than describing *what* to build.
+phyllotaxis is maintained by one person using an AI-augmented development workflow. Code contributions — even well-intentioned ones — create review overhead that slows things down more than it helps. What actually accelerates development is clear thinking: well-described problems, thoughtful feature ideas, and honest feedback about what's not working.
+
+Pull requests from external contributors will be automatically closed with a redirect to the issue templates.
+
+## Getting started
+
+1. Check [existing issues](https://github.com/OpenScribbler/phyllotaxis/issues) to see if someone has already raised your idea
+2. Pick the right template when opening a new issue
+3. Answer the questions — be as specific as you can
+4. That's it. We'll take it from there.

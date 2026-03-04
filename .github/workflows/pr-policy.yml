@@ -1,0 +1,43 @@
+name: PR Policy
+
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  check-author:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.user.login != 'holdenhewett' &&
+      github.event.pull_request.user.login != 'OpenScribblerOwner' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    steps:
+      - name: Post comment and close
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: [
+                `Thanks for your interest in phyllotaxis, @${context.payload.pull_request.user.login}!`,
+                '',
+                'This project uses an **ideas, not code** contribution model — we accept issues describing problems and ideas, but not code contributions. This lets us move faster with our AI-augmented development workflow.',
+                '',
+                'Your thinking is valuable! Please open an issue instead:',
+                '',
+                '- [Bug Report](https://github.com/OpenScribbler/phyllotaxis/issues/new?template=bug-report.yml)',
+                '- [Feature Idea](https://github.com/OpenScribbler/phyllotaxis/issues/new?template=feature-idea.yml)',
+                '- [Improvement](https://github.com/OpenScribbler/phyllotaxis/issues/new?template=improvement.yml)',
+                '',
+                'See [CONTRIBUTING.md](https://github.com/OpenScribbler/phyllotaxis/blob/main/CONTRIBUTING.md) for details.',
+              ].join('\n')
+            });
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              state: 'closed'
+            });
