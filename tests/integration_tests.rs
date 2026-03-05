@@ -1171,3 +1171,172 @@ fn test_schemas_example_flag_json() {
         "Example should be a JSON object"
     );
 }
+
+// ─── External $ref dereferencing ──────────────────────────────────────────
+
+/// Helper to run with the multi-file fixture as --spec
+fn run_with_multi_file(args: &[&str]) -> (String, String, i32) {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/multi-file/openapi.yaml", manifest_dir);
+    let mut full_args = vec!["--spec", &spec];
+    full_args.extend_from_slice(args);
+    run(&full_args)
+}
+
+#[test]
+fn test_multi_file_overview() {
+    let (stdout, _stderr, code) = run_with_multi_file(&[]);
+    assert_eq!(code, 0, "Expected exit code 0 for multi-file spec");
+    assert!(
+        stdout.contains("Multi-File API"),
+        "Missing API title. Got: {}",
+        &stdout[..200.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_multi_file_overview_json() {
+    let (stdout, _stderr, code) = run_with_multi_file(&["--json"]);
+    assert_eq!(code, 0);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
+        panic!(
+            "Expected valid JSON. Got: {}",
+            &stdout[..200.min(stdout.len())]
+        )
+    });
+    assert_eq!(json["title"], "Multi-File API");
+}
+
+#[test]
+fn test_multi_file_schemas_list() {
+    let (stdout, _stderr, code) = run_with_multi_file(&["schemas"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Pet"),
+        "Pet schema (from schemas/pet.yaml) must appear. Got: {}",
+        &stdout[..300.min(stdout.len())]
+    );
+    assert!(
+        stdout.contains("Error"),
+        "Error schema (from schemas/common.yaml#/...) must appear. Got: {}",
+        &stdout[..300.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_multi_file_resources_list() {
+    let (stdout, _stderr, code) = run_with_multi_file(&["resources"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("pets") || stdout.contains("Pets"),
+        "Pets resource (from paths/pets.yaml) must appear. Got: {}",
+        &stdout[..300.min(stdout.len())]
+    );
+}
+
+// ─── External $ref error cases ────────────────────────────────────────────
+
+#[test]
+fn test_external_ref_missing_file_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let spec_content = r#"openapi: "3.0.3"
+info:
+  title: Bad Ref API
+  version: "1.0.0"
+paths: {}
+components:
+  schemas:
+    Pet:
+      $ref: "./schemas/does-not-exist.yaml"
+"#;
+    let spec_path = tmp.path().join("openapi.yaml");
+    std::fs::write(&spec_path, spec_content).unwrap();
+
+    let (_stdout, stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "schemas"]);
+
+    assert_ne!(code, 0, "Expected non-zero exit for missing ref file");
+    assert!(
+        stderr.contains("does-not-exist.yaml") || stderr.contains("$ref"),
+        "Error message should name the missing file. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_external_ref_invalid_fragment_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shared_content = r#"components:
+  schemas:
+    RealSchema:
+      type: object
+"#;
+    std::fs::write(tmp.path().join("shared.yaml"), shared_content).unwrap();
+
+    let spec_content = r#"openapi: "3.0.3"
+info:
+  title: Bad Fragment API
+  version: "1.0.0"
+paths: {}
+components:
+  schemas:
+    Missing:
+      $ref: "./shared.yaml#/components/schemas/DoesNotExist"
+"#;
+    let spec_path = tmp.path().join("openapi.yaml");
+    std::fs::write(&spec_path, spec_content).unwrap();
+
+    let (_stdout, stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "schemas"]);
+
+    assert_ne!(
+        code, 0,
+        "Expected non-zero exit for invalid fragment pointer"
+    );
+    assert!(
+        stderr.contains("DoesNotExist")
+            || stderr.contains("fragment")
+            || stderr.contains("pointer"),
+        "Error message should mention the bad fragment. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_external_ref_circular_ref_handled() {
+    // Circular refs should be converted to local refs, not error
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("a.yaml"),
+        "type: object\nproperties:\n  b:\n    $ref: \"./b.yaml\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("b.yaml"),
+        "type: object\nproperties:\n  a:\n    $ref: \"./a.yaml\"\n",
+    )
+    .unwrap();
+
+    let spec_content = r#"openapi: "3.0.3"
+info:
+  title: Circular API
+  version: "1.0.0"
+paths: {}
+components:
+  schemas:
+    A:
+      $ref: "./a.yaml"
+"#;
+    let spec_path = tmp.path().join("openapi.yaml");
+    std::fs::write(&spec_path, spec_content).unwrap();
+
+    let (stdout, _stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "schemas"]);
+
+    assert_eq!(
+        code, 0,
+        "Circular refs should be handled gracefully, not error"
+    );
+    assert!(
+        stdout.contains("A"),
+        "Schema A should appear in output. Got: {}",
+        &stdout[..300.min(stdout.len())]
+    );
+}

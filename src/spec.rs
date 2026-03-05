@@ -208,9 +208,20 @@ pub fn load_spec(spec_flag: Option<&str>, start_dir: &Path) -> Result<LoadedSpec
     let content = std::fs::read_to_string(&spec_path)
         .with_context(|| format!("Failed to read {}", spec_path.display()))?;
 
-    // Try YAML first, then JSON
-    let api: openapiv3::OpenAPI = serde_yaml_ng::from_str(&content)
-        .or_else(|_| serde_json::from_str(&content))
+    // Pass 1: parse to untyped Value (YAML first, then JSON)
+    let mut value: serde_json::Value = serde_yaml_ng::from_str(&content)
+        .or_else(|_| serde_json::from_str::<serde_json::Value>(&content))
+        .with_context(|| format!("Failed to parse {}", spec_path.display()))?;
+
+    // Pass 2: resolve all external $ref pointers in-place
+    let base_dir = spec_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine parent dir of {}", spec_path.display()))?;
+    bundle_refs(&mut value, base_dir, &mut vec![])
+        .with_context(|| format!("Failed to bundle $refs in {}", spec_path.display()))?;
+
+    // Pass 3: convert fully-resolved Value into the typed OpenAPI struct
+    let api: openapiv3::OpenAPI = serde_json::from_value(value)
         .with_context(|| format!("Failed to parse {}", spec_path.display()))?;
 
     let config = config_result.map(|(c, _)| c).unwrap_or_default();
@@ -265,6 +276,194 @@ fn auto_detect_spec(dir: &Path) -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Navigate a `serde_json::Value` using an RFC 6901 JSON Pointer.
+///
+/// An empty pointer returns the value itself. Each `/`-delimited segment
+/// is decoded (`~1` → `/`, `~0` → `~`) before lookup. Returns `None`
+/// if any segment is missing or if an intermediate value is not an object.
+fn json_pointer_get<'a>(
+    value: &'a serde_json::Value,
+    pointer: &str,
+) -> Option<&'a serde_json::Value> {
+    if pointer.is_empty() {
+        return Some(value);
+    }
+    let mut current = value;
+    for segment in pointer.split('/').skip(1) {
+        let key = segment.replace("~1", "/").replace("~0", "~");
+        match current {
+            serde_json::Value::Object(map) => {
+                current = map.get(&key)?;
+            }
+            _ => return None,
+        }
+    }
+    Some(current)
+}
+
+/// Split an external `$ref` string into `(file_path, optional_fragment)`.
+///
+/// The fragment, if present, is an RFC 6901 JSON Pointer (starts with `/`).
+/// A trailing `#` with no content returns `None` for the fragment.
+fn parse_external_ref(ref_str: &str) -> (&str, Option<String>) {
+    match ref_str.split_once('#') {
+        None => (ref_str, None),
+        Some((path, fragment)) => {
+            let frag = if fragment.is_empty() {
+                None
+            } else {
+                Some(fragment.to_string())
+            };
+            (path, frag)
+        }
+    }
+}
+
+/// Recursively walk `value`, resolving all external `$ref` pointers in-place.
+///
+/// - Local refs (`#/...`) are left untouched — openapiv3 handles them.
+/// - External refs to YAML/JSON files are resolved and inlined.
+/// - External refs to other file types (`.cs`, `.php`, etc.) are left as-is.
+/// - Circular refs are converted to local `#/` refs pointing to where the
+///   file was first inlined, rather than erroring. This handles recursive
+///   schemas (e.g., a `User` schema with a self-referencing property).
+pub fn bundle_refs(
+    value: &mut serde_json::Value,
+    base_dir: &Path,
+    visited: &mut Vec<PathBuf>,
+) -> Result<()> {
+    bundle_refs_impl(value, base_dir, visited, &mut HashMap::new(), "")
+}
+
+/// Internal implementation that tracks document position and file locations
+/// for cycle-to-local-ref conversion.
+fn bundle_refs_impl(
+    value: &mut serde_json::Value,
+    base_dir: &Path,
+    visited: &mut Vec<PathBuf>,
+    file_locations: &mut HashMap<PathBuf, String>,
+    current_pointer: &str,
+) -> Result<()> {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Check if this object IS a $ref
+            if let Some(serde_json::Value::String(ref_str)) = map.get("$ref").cloned() {
+                // Local ref — leave it for openapiv3 to resolve
+                if ref_str.starts_with('#') {
+                    return Ok(());
+                }
+
+                // External ref — resolve it
+                let (file_part, fragment) = parse_external_ref(&ref_str);
+
+                // Only resolve refs to YAML/JSON files; leave others as-is
+                // (e.g., code samples like .cs, .php in vendor extensions)
+                let ext = Path::new(file_part)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                if !matches!(ext, "yaml" | "yml" | "json") {
+                    return Ok(());
+                }
+
+                let file_path = base_dir.join(file_part);
+                let canonical = file_path.canonicalize().with_context(|| {
+                    format!(
+                        "Failed to resolve $ref '{}': file not found at {} (referenced from {})",
+                        ref_str,
+                        file_path.display(),
+                        base_dir.display()
+                    )
+                })?;
+
+                // Cycle check — convert to local ref instead of erroring
+                if visited.contains(&canonical) {
+                    if let Some(inline_pointer) = file_locations.get(&canonical) {
+                        // Convert to local ref pointing to where the file was first inlined
+                        *value = serde_json::json!({"$ref": format!("#{}", inline_pointer)});
+                    }
+                    // If no known location yet (shouldn't happen), leave as-is
+                    return Ok(());
+                }
+
+                // Load external file
+                let content = std::fs::read_to_string(&canonical).with_context(|| {
+                    format!(
+                        "Failed to read $ref target {} (referenced from {})",
+                        canonical.display(),
+                        base_dir.display()
+                    )
+                })?;
+                let mut external: serde_json::Value = serde_yaml_ng::from_str(&content)
+                    .or_else(|_| serde_json::from_str::<serde_json::Value>(&content))
+                    .with_context(|| {
+                        format!(
+                            "Failed to parse {} (referenced from {})",
+                            canonical.display(),
+                            base_dir.display()
+                        )
+                    })?;
+
+                // Record where this file is being inlined BEFORE recursing
+                // (needed for self-referencing schemas like User → User)
+                file_locations.insert(canonical.clone(), current_pointer.to_string());
+
+                // Recursively bundle the loaded file (it may have its own external refs)
+                let ext_dir = canonical.parent().ok_or_else(|| {
+                    anyhow::anyhow!("Cannot determine parent dir of {}", canonical.display())
+                })?;
+                visited.push(canonical.clone());
+                bundle_refs_impl(
+                    &mut external,
+                    ext_dir,
+                    visited,
+                    file_locations,
+                    current_pointer,
+                )?;
+                visited.pop();
+
+                // Navigate to fragment if present
+                let resolved = if let Some(ref frag) = fragment {
+                    json_pointer_get(&external, frag)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Invalid fragment in $ref '{}': pointer '{}' not found in {}",
+                                ref_str,
+                                frag,
+                                canonical.display()
+                            )
+                        })?
+                        .clone()
+                } else {
+                    external
+                };
+
+                // Replace the $ref object with the resolved content
+                *value = resolved;
+                return Ok(());
+            }
+
+            // Not a $ref — recurse into all values, tracking position
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for key in keys {
+                let child_pointer = format!("{}/{}", current_pointer, key);
+                if let Some(v) = map.get_mut(&key) {
+                    bundle_refs_impl(v, base_dir, visited, file_locations, &child_pointer)?;
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for (i, v) in arr.iter_mut().enumerate() {
+                let child_pointer = format!("{}/{}", current_pointer, i);
+                bundle_refs_impl(v, base_dir, visited, file_locations, &child_pointer)?;
+            }
+        }
+        // Primitives — nothing to do
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Extracts the schema name from a $ref string like "#/components/schemas/Pet".
@@ -655,5 +854,86 @@ mod tests {
             "Empty env var should fall through to auto-detect"
         );
         assert_eq!(result.unwrap(), spec_path);
+    }
+
+    #[test]
+    fn test_parse_external_ref_bare_file() {
+        let (path, fragment) = parse_external_ref("./schemas/pet.yaml");
+        assert_eq!(path, "./schemas/pet.yaml");
+        assert_eq!(fragment, None);
+    }
+
+    #[test]
+    fn test_parse_external_ref_with_fragment() {
+        let (path, fragment) = parse_external_ref("./schemas.yaml#/components/schemas/Pet");
+        assert_eq!(path, "./schemas.yaml");
+        assert_eq!(fragment.as_deref(), Some("/components/schemas/Pet"));
+    }
+
+    #[test]
+    fn test_parse_external_ref_empty_fragment() {
+        let (path, fragment) = parse_external_ref("./file.yaml#");
+        assert_eq!(path, "./file.yaml");
+        assert_eq!(fragment, None);
+    }
+
+    #[test]
+    fn test_parse_external_ref_absolute_path_with_fragment() {
+        let (path, fragment) = parse_external_ref("/abs/path/schema.yaml#/Foo");
+        assert_eq!(path, "/abs/path/schema.yaml");
+        assert_eq!(fragment.as_deref(), Some("/Foo"));
+    }
+
+    #[test]
+    fn test_parse_external_ref_no_dot_prefix() {
+        let (path, fragment) = parse_external_ref("schemas/pet.yaml");
+        assert_eq!(path, "schemas/pet.yaml");
+        assert_eq!(fragment, None);
+    }
+
+    #[test]
+    fn test_json_pointer_root() {
+        let val = serde_json::json!({"a": 1});
+        assert_eq!(json_pointer_get(&val, ""), Some(&val));
+    }
+
+    #[test]
+    fn test_json_pointer_simple() {
+        let val = serde_json::json!({"components": {"schemas": {"Pet": {"type": "object"}}}});
+        let result = json_pointer_get(&val, "/components/schemas/Pet");
+        assert_eq!(result, Some(&serde_json::json!({"type": "object"})));
+    }
+
+    #[test]
+    fn test_json_pointer_missing_key() {
+        let val = serde_json::json!({"a": 1});
+        assert_eq!(json_pointer_get(&val, "/b"), None);
+    }
+
+    #[test]
+    fn test_json_pointer_escape_tilde1() {
+        // ~1 decodes to /
+        let val = serde_json::json!({"a/b": 42});
+        assert_eq!(
+            json_pointer_get(&val, "/a~1b"),
+            Some(&serde_json::json!(42))
+        );
+    }
+
+    #[test]
+    fn test_json_pointer_escape_tilde0() {
+        // ~0 decodes to ~
+        let val = serde_json::json!({"a~b": 99});
+        assert_eq!(
+            json_pointer_get(&val, "/a~0b"),
+            Some(&serde_json::json!(99))
+        );
+    }
+
+    #[test]
+    fn test_json_pointer_intermediate_not_object() {
+        // Navigating through a non-object returns None
+        let val = serde_json::json!({"a": "not_an_object"});
+        assert_eq!(json_pointer_get(&val, "/a/b"), None);
     }
 }

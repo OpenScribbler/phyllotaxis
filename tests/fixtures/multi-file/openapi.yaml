@@ -1,0 +1,14 @@
+openapi: "3.0.3"
+info:
+  title: Multi-File API
+  version: "1.0.0"
+  description: Entry-point spec that references external files.
+paths:
+  /pets:
+    $ref: "./paths/pets.yaml"
+components:
+  schemas:
+    Pet:
+      $ref: "./schemas/pet.yaml"
+    Error:
+      $ref: "./schemas/common.yaml#/components/schemas/Error"

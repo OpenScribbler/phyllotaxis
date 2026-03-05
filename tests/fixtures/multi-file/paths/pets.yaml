@@ -1,0 +1,42 @@
+get:
+  summary: List all pets
+  operationId: listPets
+  tags:
+    - Pets
+  parameters:
+    - name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+  responses:
+    "200":
+      description: A list of pets
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/Pet"
+    "default":
+      description: Unexpected error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+post:
+  summary: Create a pet
+  operationId: createPet
+  tags:
+    - Pets
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/Pet"
+  responses:
+    "201":
+      description: Pet created
+    "400":
+      description: Validation error

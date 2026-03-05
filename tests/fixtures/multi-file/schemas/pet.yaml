@@ -1,0 +1,19 @@
+type: object
+required:
+  - id
+  - name
+properties:
+  id:
+    type: string
+    format: uuid
+    description: Unique identifier
+  name:
+    type: string
+    description: Pet name
+    example: Fido
+  status:
+    type: string
+    enum:
+      - available
+      - pending
+      - sold
