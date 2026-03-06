@@ -117,6 +117,7 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, is_tty: bool) -> Str
         resources: String,
         schemas: String,
         auth: String,
+        callbacks: String,
         search: String,
     }
 
@@ -150,9 +151,10 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, is_tty: bool) -> Str
         callback_count: data.callback_count,
         top_resources: &data.top_resources,
         commands: CommandsJson {
-            resources: format!("{} resources", bin_name),
-            schemas: format!("{} schemas", bin_name),
-            auth: format!("{} auth", bin_name),
+            resources: format!("{} --resources", bin_name),
+            schemas: format!("{} --schemas", bin_name),
+            auth: format!("{} --auth", bin_name),
+            callbacks: format!("{} --callbacks", bin_name),
             search: format!("{} search", bin_name),
         },
     };
@@ -191,7 +193,7 @@ pub fn render_resource_list(groups: &[ResourceGroup], bin_name: &str, is_tty: bo
 
     let json = ResourceListJson {
         resources,
-        drill_deeper: format!("{} resources <name>", bin_name),
+        drill_deeper: format!("{} --resources <name>", bin_name),
     };
 
     serialize(&json, is_tty)
@@ -233,12 +235,7 @@ pub fn render_resource_detail(group: &ResourceGroup, bin_name: &str, is_tty: boo
     let drill_deeper: Vec<String> = group
         .endpoints
         .iter()
-        .map(|e| {
-            format!(
-                "{} resources {} {} {}",
-                bin_name, group.slug, e.method, e.path
-            )
-        })
+        .map(|e| format!("{} --endpoint {} {}", bin_name, e.method, e.path))
         .collect();
 
     let json = ResourceDetailJson {
@@ -265,7 +262,7 @@ pub fn render_schema_list(names: &[String], bin_name: &str, is_tty: bool) -> Str
     let json = SchemaListJson {
         total: names.len(),
         schemas: names,
-        drill_deeper: format!("{} schemas <name>", bin_name),
+        drill_deeper: format!("{} --schemas <name>", bin_name),
     };
 
     serialize(&json, is_tty)
@@ -317,7 +314,7 @@ pub fn render_schema_detail(
             .iter()
             .filter_map(|f| f.nested_schema_name.as_ref())
             .filter(|name| seen.insert(name.to_string()))
-            .map(|name| format!("{} schemas {}", bin_name, name))
+            .map(|name| format!("{} --schemas {}", bin_name, name))
             .collect()
     };
 
@@ -369,7 +366,7 @@ pub fn render_callback_list(
     let json = CallbackListJson {
         total: items.len(),
         callbacks: items,
-        drill_deeper: format!("{} callbacks <name>", bin_name),
+        drill_deeper: format!("{} --callbacks <name>", bin_name),
     };
     serialize(&json, is_tty)
 }
@@ -695,12 +692,12 @@ mod tests {
             security_schemes: vec![],
             callbacks: vec![],
             links: vec![],
-            drill_deeper: vec!["phyll schemas Pet".to_string()],
+            drill_deeper: vec!["phyll --schemas Pet".to_string()],
         };
         let v = parse_json(&render_endpoint_detail(&endpoint, false));
         assert_eq!(
             v["drill_deeper"],
-            serde_json::json!(["phyll schemas Pet"]),
+            serde_json::json!(["phyll --schemas Pet"]),
             "drill_deeper should contain the schema command"
         );
     }

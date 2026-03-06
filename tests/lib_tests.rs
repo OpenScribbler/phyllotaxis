@@ -183,11 +183,11 @@ fn test_render_overview_text_direct() {
         output
     );
     assert!(
-        output.contains("phyllotaxis resources"),
+        output.contains("phyllotaxis --resources"),
         "render_overview should contain resources hint"
     );
     assert!(
-        output.contains("phyllotaxis schemas"),
+        output.contains("phyllotaxis --schemas"),
         "render_overview should contain schemas hint"
     );
 }

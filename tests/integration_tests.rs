@@ -33,15 +33,15 @@ fn test_overview_text() {
         &stdout[..200.min(stdout.len())]
     );
     assert!(
-        stdout.contains("phyllotaxis resources"),
+        stdout.contains("phyllotaxis --resources"),
         "Missing resources command hint"
     );
     assert!(
-        stdout.contains("phyllotaxis schemas"),
+        stdout.contains("phyllotaxis --schemas"),
         "Missing schemas command hint"
     );
     assert!(
-        stdout.contains("phyllotaxis auth"),
+        stdout.contains("phyllotaxis --auth"),
         "Missing auth command hint"
     );
 }
@@ -63,7 +63,7 @@ fn test_overview_json() {
 
 #[test]
 fn test_resources_list() {
-    let (stdout, _stderr, code) = run_with_petstore(&["resources"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--resources"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("pets"), "Missing pets group");
     assert!(
@@ -79,7 +79,7 @@ fn test_resources_list() {
 
 #[test]
 fn test_resources_detail() {
-    let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--resources", "pets"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Resource: Pets"), "Missing resource header");
     assert!(stdout.contains("GET"), "Missing GET method");
@@ -90,7 +90,7 @@ fn test_resources_detail() {
 
 #[test]
 fn test_resources_endpoint_get() {
-    let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets", "GET", "/pets"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--endpoint", "GET", "/pets"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Query Parameters"),
@@ -101,7 +101,7 @@ fn test_resources_endpoint_get() {
 
 #[test]
 fn test_resources_endpoint_post() {
-    let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets", "POST", "/pets"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--endpoint", "POST", "/pets"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Request Body"),
@@ -117,7 +117,7 @@ fn test_resources_endpoint_post() {
 
 #[test]
 fn test_resources_not_found() {
-    let (_stdout, stderr, code) = run_with_petstore(&["resources", "notexist"]);
+    let (_stdout, stderr, code) = run_with_petstore(&["--resources", "notexist"]);
     assert_eq!(code, 1, "Expected exit code 1 for not found");
     assert!(
         stderr.contains("not found"),
@@ -130,7 +130,7 @@ fn test_resources_not_found() {
 
 #[test]
 fn test_schemas_list() {
-    let (stdout, _stderr, code) = run_with_petstore(&["schemas"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--schemas"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Pet"), "Missing Pet schema");
     assert!(stdout.contains("Owner"), "Missing Owner schema");
@@ -139,7 +139,7 @@ fn test_schemas_list() {
 
 #[test]
 fn test_schema_detail_pet() {
-    let (stdout, _stderr, code) = run_with_petstore(&["schemas", "Pet"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--schemas", "Pet"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Schema: Pet"), "Missing schema header");
     assert!(stdout.contains("string/uuid"), "Missing uuid type for id");
@@ -152,7 +152,7 @@ fn test_schema_detail_pet() {
 
 #[test]
 fn test_schema_detail_expanded() {
-    let (stdout, _stderr, code) = run_with_petstore(&["schemas", "Pet", "--expand"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--schemas", "Pet", "--expand"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("(expanded)"), "Missing expanded label");
     assert!(
@@ -163,7 +163,7 @@ fn test_schema_detail_expanded() {
 
 #[test]
 fn test_schema_allof() {
-    let (stdout, _stderr, code) = run_with_petstore(&["schemas", "PetList"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--schemas", "PetList"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("id"),
@@ -174,7 +174,7 @@ fn test_schema_allof() {
 
 #[test]
 fn test_schema_oneof() {
-    let (stdout, _stderr, code) = run_with_petstore(&["schemas", "PetOrOwner"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--schemas", "PetOrOwner"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("oneOf"),
@@ -186,7 +186,7 @@ fn test_schema_oneof() {
 
 #[test]
 fn test_schema_not_found() {
-    let (_stdout, stderr, code) = run_with_petstore(&["schemas", "NotReal"]);
+    let (_stdout, stderr, code) = run_with_petstore(&["--schemas", "NotReal"]);
     assert_eq!(code, 1, "Expected exit code 1 for not found");
     assert!(
         stderr.contains("not found"),
@@ -198,7 +198,7 @@ fn test_schema_not_found() {
 
 #[test]
 fn test_auth() {
-    let (stdout, _stderr, code) = run_with_petstore(&["auth"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--auth"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("bearerAuth"),
@@ -242,56 +242,11 @@ fn test_search_no_results() {
 
 #[test]
 fn test_endpoint_not_found() {
-    let (_stdout, stderr, code) =
-        run_with_petstore(&["resources", "pets", "DELETE", "/nonexistent"]);
+    let (_stdout, stderr, code) = run_with_petstore(&["--endpoint", "DELETE", "/nonexistent"]);
     assert_eq!(code, 1, "Expected exit code 1 for endpoint not found");
     assert!(
         stderr.to_lowercase().contains("not found"),
         "Expected 'not found' in stderr. Got: {}",
-        stderr
-    );
-}
-
-#[test]
-fn test_method_without_path_errors() {
-    let (_stdout, stderr, code) = run_with_petstore(&["resources", "pets", "GET"]);
-    assert_eq!(
-        code, 1,
-        "Expected exit code 1 when method provided without path"
-    );
-    assert!(
-        stderr.contains("Missing endpoint path"),
-        "Expected 'Missing endpoint path' in stderr. Got: {}",
-        stderr
-    );
-    assert!(
-        stderr.contains("GET"),
-        "Expected method echoed in usage hint. Got: {}",
-        stderr
-    );
-}
-
-#[test]
-fn test_method_without_path_json_errors() {
-    let (_stdout, stderr, code) = run_with_petstore(&["--json", "resources", "pets", "POST"]);
-    assert_eq!(
-        code, 1,
-        "Expected exit code 1 when method provided without path in JSON mode"
-    );
-    let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|_| {
-        panic!(
-            "Expected stderr to be valid JSON. Got: {:?}",
-            &stderr[..200.min(stderr.len())]
-        )
-    });
-    assert!(
-        parsed.get("error").is_some(),
-        "Expected JSON stderr to have an 'error' key. Got: {}",
-        parsed
-    );
-    assert!(
-        stderr.contains("Missing endpoint path"),
-        "Expected 'Missing endpoint path' in JSON error. Got: {}",
         stderr
     );
 }
@@ -370,20 +325,12 @@ fn test_json_flag_all_commands() {
 
     let commands: Vec<Vec<&str>> = vec![
         vec!["--spec", &spec, "--json"],
-        vec!["--spec", &spec, "--json", "resources"],
-        vec!["--spec", &spec, "--json", "resources", "pets"],
-        vec![
-            "--spec",
-            &spec,
-            "--json",
-            "resources",
-            "pets",
-            "GET",
-            "/pets",
-        ],
-        vec!["--spec", &spec, "--json", "schemas"],
-        vec!["--spec", &spec, "--json", "schemas", "Pet"],
-        vec!["--spec", &spec, "--json", "auth"],
+        vec!["--spec", &spec, "--json", "--resources"],
+        vec!["--spec", &spec, "--json", "--resources", "pets"],
+        vec!["--spec", &spec, "--json", "--endpoint", "GET", "/pets"],
+        vec!["--spec", &spec, "--json", "--schemas"],
+        vec!["--spec", &spec, "--json", "--schemas", "Pet"],
+        vec!["--spec", &spec, "--json", "--auth"],
         vec!["--spec", &spec, "--json", "search", "pet"],
     ];
 
@@ -422,7 +369,7 @@ fn test_json_error_is_structured() {
     // When --json is passed and a resource is not found, stderr must be valid JSON
     // with an "error" key — not a plain "Error: ..." string.
     let (_stdout, stderr, code) =
-        run_with_petstore(&["--json", "resources", "nonexistentresource"]);
+        run_with_petstore(&["--json", "--resources", "nonexistentresource"]);
     assert_eq!(code, 1, "Expected exit code 1 for not found");
 
     let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|_| {
@@ -446,7 +393,7 @@ fn test_json_error_is_structured() {
 #[test]
 fn test_json_compact_when_piped() {
     // In test context, stdout is a pipe (non-TTY), so JSON must be compact (single line, no newlines).
-    let (stdout, _stderr, code) = run_with_petstore(&["--json", "resources"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "--resources"]);
     assert_eq!(code, 0, "Expected exit code 0");
 
     // Must be valid JSON
@@ -496,7 +443,7 @@ fn has_decorator_lines(s: &str) -> bool {
 
 #[test]
 fn test_no_color_env_plain_output() {
-    let (stdout, _stderr, code) = run_with_petstore_env(&["resources"], &[("NO_COLOR", "1")]);
+    let (stdout, _stderr, code) = run_with_petstore_env(&["--resources"], &[("NO_COLOR", "1")]);
     assert_eq!(code, 0);
     // Resource names must still appear
     assert!(
@@ -520,7 +467,7 @@ fn test_no_color_env_plain_output() {
 
 #[test]
 fn test_term_dumb_plain_output() {
-    let (stdout, _stderr, code) = run_with_petstore_env(&["resources"], &[("TERM", "dumb")]);
+    let (stdout, _stderr, code) = run_with_petstore_env(&["--resources"], &[("TERM", "dumb")]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("pets"),
@@ -543,7 +490,7 @@ fn test_term_dumb_plain_output() {
 fn test_piped_output_plain() {
     // assert_cmd captures stdout as a pipe, so is_terminal() returns false.
     // run_with_petstore already captures output (non-TTY), so we just assert plain format.
-    let (stdout, _stderr, code) = run_with_petstore(&["resources"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--resources"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("pets"),
@@ -625,7 +572,7 @@ fn test_non_tty_no_unicode_arrow_in_response_schema() {
     // Non-TTY output (piped, which is what Command::output gives us) must not contain
     // the Unicode → character. It should use ASCII -> instead.
     // POST /pets returns 201 Created with schema ref Pet, so → appears in responses.
-    let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets", "POST", "/pets"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--endpoint", "POST", "/pets"]);
     assert_eq!(code, 0);
     assert!(
         !stdout.contains('→'),
@@ -642,7 +589,7 @@ fn test_non_tty_no_unicode_arrow_in_response_schema() {
 #[test]
 fn test_non_tty_no_unicode_arrow_in_discriminator() {
     // schemas PetOrOwner has a discriminator with mappings, which also render with →.
-    let (stdout, _stderr, code) = run_with_petstore(&["schemas", "PetOrOwner"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--schemas", "PetOrOwner"]);
     assert_eq!(code, 0);
     assert!(
         !stdout.contains('→'),
@@ -717,8 +664,7 @@ fn run_with_kitchen_sink(args: &[&str]) -> (String, String, i32) {
 // Success criterion 1: Non-JSON request bodies (multipart/form-data)
 #[test]
 fn test_multipart_body_visible_in_upload_endpoint() {
-    let (stdout, _stderr, code) =
-        run_with_kitchen_sink(&["resources", "files", "POST", "/files/upload"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--endpoint", "POST", "/files/upload"]);
     assert_eq!(code, 0, "Expected exit code 0");
     assert!(
         stdout.contains("multipart/form-data"),
@@ -735,7 +681,7 @@ fn test_multipart_body_visible_in_upload_endpoint() {
 // Success criterion 2: Response headers
 #[test]
 fn test_response_headers_visible() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "users", "GET", "/users"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--endpoint", "GET", "/users"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("X-Total-Count"),
@@ -747,7 +693,7 @@ fn test_response_headers_visible() {
 // Success criterion 3: Callbacks list
 #[test]
 fn test_callbacks_list_kitchen_sink() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["callbacks"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--callbacks"]);
     assert_eq!(code, 0, "Expected exit code 0");
     assert!(stdout.contains("onEvent"), "Missing onEvent callback");
     assert!(
@@ -759,7 +705,7 @@ fn test_callbacks_list_kitchen_sink() {
 // Success criterion 4: Callback detail
 #[test]
 fn test_callbacks_detail_on_event() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["callbacks", "onEvent"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--callbacks", "onEvent"]);
     assert_eq!(code, 0, "Expected exit code 0");
     assert!(stdout.contains("Callback: onEvent"), "Missing header");
     assert!(stdout.contains("EventPayload"), "Missing body schema");
@@ -767,7 +713,7 @@ fn test_callbacks_detail_on_event() {
 
 #[test]
 fn test_callbacks_not_found() {
-    let (_stdout, stderr, code) = run_with_kitchen_sink(&["callbacks", "nonexistent"]);
+    let (_stdout, stderr, code) = run_with_kitchen_sink(&["--callbacks", "nonexistent"]);
     assert_eq!(code, 1, "Expected exit code 1");
     assert!(stderr.contains("not found"), "Missing not found message");
 }
@@ -775,7 +721,7 @@ fn test_callbacks_not_found() {
 // Success criterion 5: Links
 #[test]
 fn test_links_visible_on_post_users() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["resources", "users", "POST", "/users"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--endpoint", "POST", "/users"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("GetCreatedUser"),
@@ -787,7 +733,7 @@ fn test_links_visible_on_post_users() {
 // Success criterion 6: Schema constraints
 #[test]
 fn test_schema_constraints_visible() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "User"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--schemas", "User"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("min:3"),
@@ -804,7 +750,7 @@ fn test_schema_constraints_visible() {
 // Success criterion 7: writeOnly
 #[test]
 fn test_write_only_visible_on_create_user_request() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "CreateUserRequest"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--schemas", "CreateUserRequest"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("write-only"),
@@ -816,7 +762,7 @@ fn test_write_only_visible_on_create_user_request() {
 // Success criterion 8: deprecated
 #[test]
 fn test_deprecated_visible_on_pet_base() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "PetBase"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--schemas", "PetBase"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("DEPRECATED"),
@@ -828,7 +774,7 @@ fn test_deprecated_visible_on_pet_base() {
 // Success criterion 9: Schema title
 #[test]
 fn test_schema_title_visible() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "GeoLocation"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--schemas", "GeoLocation"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Geographic Location"),
@@ -840,7 +786,7 @@ fn test_schema_title_visible() {
 // Success criterion 10: Integer enums
 #[test]
 fn test_integer_enum_visible() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "Priority"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--schemas", "Priority"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains('0'),
@@ -859,7 +805,7 @@ fn test_integer_enum_visible() {
 #[test]
 fn test_empty_request_body_shows_raw_body_message() {
     let (stdout, _stderr, code) =
-        run_with_kitchen_sink(&["resources", "admin", "POST", "/admin/bulk-import"]);
+        run_with_kitchen_sink(&["--endpoint", "POST", "/admin/bulk-import"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Raw body (no schema)"),
@@ -870,7 +816,7 @@ fn test_empty_request_body_shows_raw_body_message() {
 
 #[test]
 fn test_exclusive_min_max_shows_operators() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["schemas", "GeoLocation"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--schemas", "GeoLocation"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains(">0"),
@@ -888,7 +834,7 @@ fn test_exclusive_min_max_shows_operators() {
 #[test]
 fn test_array_item_type_propagation() {
     let (stdout, _stderr, code) =
-        run_with_kitchen_sink(&["resources", "files", "POST", "/files/upload-batch"]);
+        run_with_kitchen_sink(&["--endpoint", "POST", "/files/upload-batch"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("binary[]"),
@@ -899,8 +845,7 @@ fn test_array_item_type_propagation() {
 
 #[test]
 fn test_no_trailing_whitespace_on_empty_header_description() {
-    let (stdout, _stderr, code) =
-        run_with_kitchen_sink(&["resources", "health", "HEAD", "/health"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--endpoint", "HEAD", "/health"]);
     assert_eq!(code, 0);
     // Find the X-Health-Status line and check for trailing whitespace
     for line in stdout.lines() {
@@ -917,7 +862,7 @@ fn test_no_trailing_whitespace_on_empty_header_description() {
 #[test]
 fn test_json_no_top_level_links() {
     let (stdout, _stderr, code) =
-        run_with_kitchen_sink(&["--json", "resources", "users", "POST", "/users"]);
+        run_with_kitchen_sink(&["--json", "--endpoint", "POST", "/users"]);
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|_| panic!("Invalid JSON: {}", &stdout[..200.min(stdout.len())]));
@@ -941,7 +886,7 @@ fn test_json_no_top_level_links() {
 
 #[test]
 fn test_callback_list_shows_operation_count() {
-    let (stdout, _stderr, code) = run_with_kitchen_sink(&["callbacks"]);
+    let (stdout, _stderr, code) = run_with_kitchen_sink(&["--callbacks"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("(1 operation)") || stdout.contains("(2 operations)"),
@@ -952,8 +897,7 @@ fn test_callback_list_shows_operation_count() {
 
 #[test]
 fn test_expand_on_endpoint_shows_nested_fields() {
-    let (stdout, _stderr, code) =
-        run_with_petstore(&["resources", "pets", "POST", "/pets", "--expand"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--endpoint", "POST", "/pets", "--expand"]);
     assert_eq!(code, 0);
     // With --expand, the owner field should show its nested fields (id, name)
     assert!(
@@ -981,7 +925,7 @@ fn test_search_finds_callbacks() {
 
 #[test]
 fn test_callbacks_fuzzy_suggestion_on_typo() {
-    let (_stdout, stderr, code) = run_with_kitchen_sink(&["callbacks", "onEven"]);
+    let (_stdout, stderr, code) = run_with_kitchen_sink(&["--callbacks", "onEven"]);
     assert_eq!(code, 1, "Expected exit code 1 for not found");
     assert!(
         stderr.contains("onEvent"),
@@ -1036,7 +980,7 @@ fn test_overview_json_includes_top_resources() {
 // Success criterion 11: No regressions on petstore
 #[test]
 fn test_petstore_regression() {
-    let (stdout, _stderr, code) = run_with_petstore(&["resources", "pets", "POST", "/pets"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--endpoint", "POST", "/pets"]);
     assert_eq!(code, 0, "Petstore regression: POST /pets should still work");
     assert!(
         stdout.contains("Request Body"),
@@ -1050,7 +994,7 @@ fn test_petstore_regression() {
 fn test_drill_deeper_uses_binary_name() {
     // Drill-deeper hints should use the detected binary name.
     // Use --json which always includes drill_deeper regardless of TTY.
-    let (stdout, _stderr, code) = run_with_petstore(&["--json", "resources", "pets"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "--resources", "pets"]);
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
         panic!(
@@ -1090,7 +1034,7 @@ fn test_overview_alias_tip_shown_when_invoked_as_phyllotaxis() {
 #[test]
 fn test_schema_list_drill_deeper_uses_phyll() {
     // Use --json which always includes drill_deeper regardless of TTY
-    let (stdout, _stderr, code) = run_with_petstore(&["--json", "schemas"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "--schemas"]);
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
         panic!(
@@ -1108,42 +1052,11 @@ fn test_schema_list_drill_deeper_uses_phyll() {
     );
 }
 
-// ─── Item 1: Better Error Messages for Endpoint Syntax ───
-
-#[test]
-fn test_error_method_path_as_single_arg() {
-    let (_, stderr, code) = run_with_petstore(&["resources", "pets", "GET /pets"]);
-    assert_ne!(code, 0, "Should fail when method+path passed as one arg");
-    assert!(
-        stderr.contains("separate arguments"),
-        "Error should say 'separate arguments'. Got: {}",
-        stderr
-    );
-    assert!(
-        stderr.contains("resources pets GET /pets"),
-        "Error should show corrected command. Got: {}",
-        stderr
-    );
-}
-
-#[test]
-fn test_error_method_path_as_single_arg_json() {
-    let (_, stderr, code) = run_with_petstore(&["--json", "resources", "pets", "GET /pets"]);
-    assert_ne!(code, 0);
-    // JSON mode: error still goes to stderr but as JSON
-    let json: serde_json::Value = serde_json::from_str(stderr.trim())
-        .unwrap_or_else(|_| panic!("Expected JSON on stderr. Got: {}", stderr));
-    assert!(json["error"]
-        .as_str()
-        .unwrap()
-        .contains("separate arguments"));
-}
-
 // ─── Item 5: --example flag ───
 
 #[test]
 fn test_schemas_example_flag() {
-    let (stdout, _stderr, code) = run_with_petstore(&["schemas", "Pet", "--example"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--schemas", "Pet", "--example"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Example"),
@@ -1160,7 +1073,7 @@ fn test_schemas_example_flag() {
 
 #[test]
 fn test_schemas_example_flag_json() {
-    let (stdout, _stderr, code) = run_with_petstore(&["--json", "schemas", "Pet", "--example"]);
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "--schemas", "Pet", "--example"]);
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|_| panic!("Expected valid JSON. Got: {}", stdout));
@@ -1169,6 +1082,237 @@ fn test_schemas_example_flag_json() {
     assert!(
         json["example"].is_object(),
         "Example should be a JSON object"
+    );
+}
+
+// ─── CLI composition and migration ────────────────────────────────────────
+
+#[test]
+fn test_multi_flag_resources_and_schemas() {
+    // Combining --resources and --schemas in one call should produce both outputs
+    let (stdout, _stderr, code) = run_with_petstore(&["--resources", "--schemas"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("pets"),
+        "Combined output should include resource list. Got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+    assert!(
+        stdout.contains("Pet"),
+        "Combined output should include schema list. Got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_multi_flag_resources_detail_and_schemas_detail() {
+    // Drill into both at once: --resources pets --schemas Pet
+    let (stdout, _stderr, code) = run_with_petstore(&["--resources", "pets", "--schemas", "Pet"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Resource: Pets"),
+        "Should contain resource detail header. Got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+    assert!(
+        stdout.contains("Schema: Pet"),
+        "Should contain schema detail header. Got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_multi_flag_resources_and_auth() {
+    let (stdout, _stderr, code) = run_with_petstore(&["--resources", "--auth"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("pets"), "Should include resource list");
+    assert!(stdout.contains("bearerAuth"), "Should include auth details");
+}
+
+#[test]
+fn test_multi_flag_json_composition() {
+    // JSON mode with multiple flags — each handler prints its own JSON object
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "--resources", "--auth"]);
+    assert_eq!(code, 0);
+    // Both JSON objects should be present in stdout
+    assert!(
+        stdout.contains("\"resources\"") || stdout.contains("\"resource_groups\""),
+        "JSON output should contain resources data"
+    );
+    assert!(
+        stdout.contains("\"security_schemes\"") || stdout.contains("\"schemes\""),
+        "JSON output should contain auth data"
+    );
+}
+
+#[test]
+fn test_positional_document_arg() {
+    // phyll <document> --resources should use document as spec path
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    let (stdout, _stderr, code) = run(&[&spec, "--resources"]);
+    assert_eq!(code, 0, "Positional document arg should work as spec path");
+    assert!(
+        stdout.contains("pets"),
+        "Should list resources from positional doc arg. Got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_positional_document_overrides_spec_flag() {
+    // Positional document takes priority over --spec
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let petstore = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    let kitchen_sink = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
+    // Pass kitchen-sink as positional, petstore as --spec — should use kitchen-sink
+    let (stdout, _stderr, code) = run(&[&kitchen_sink, "--spec", &petstore, "--resources"]);
+    assert_eq!(code, 0);
+    // kitchen-sink has /users, petstore does not
+    assert!(
+        stdout.contains("users"),
+        "Positional doc should override --spec. Expected kitchen-sink resources. Got:\n{}",
+        &stdout[..400.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_migration_guard_resources() {
+    let (_stdout, stderr, code) = run_with_petstore(&[]);
+    // First confirm petstore loads fine
+    assert_eq!(code, 0);
+
+    // Now test the migration guard: "resources" as positional should be caught
+    // Use a tmpdir with no spec so the only arg is the old subcommand name
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
+        .current_dir(dir.path())
+        .arg("resources")
+        .output()
+        .expect("failed to run");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert_eq!(code, 1, "Old subcommand should fail with migration hint");
+    assert!(
+        stderr.contains("removed in v2.0"),
+        "Should show migration hint. Got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("--resources"),
+        "Migration hint should suggest new syntax. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_migration_guard_schemas() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
+        .current_dir(dir.path())
+        .arg("schemas")
+        .output()
+        .expect("failed to run");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("removed in v2.0"));
+    assert!(stderr.contains("--schemas"));
+}
+
+#[test]
+fn test_migration_guard_auth() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
+        .current_dir(dir.path())
+        .arg("auth")
+        .output()
+        .expect("failed to run");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("removed in v2.0"));
+    assert!(stderr.contains("--auth"));
+}
+
+#[test]
+fn test_migration_guard_callbacks() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
+        .current_dir(dir.path())
+        .arg("callbacks")
+        .output()
+        .expect("failed to run");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("removed in v2.0"));
+    assert!(stderr.contains("--callbacks"));
+}
+
+#[test]
+fn test_migration_guard_endpoints() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
+        .current_dir(dir.path())
+        .arg("endpoints")
+        .output()
+        .expect("failed to run");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("removed in v2.0"));
+    assert!(stderr.contains("--resources"));
+}
+
+#[test]
+fn test_migration_guard_json_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
+        .current_dir(dir.path())
+        .args(["schemas", "--json"])
+        .output()
+        .expect("failed to run");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert_eq!(code, 1);
+    // JSON mode should produce structured error
+    let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|_| {
+        panic!(
+            "Migration error in --json mode should be valid JSON. Got: {}",
+            stderr
+        )
+    });
+    assert!(parsed.get("error").is_some());
+    assert!(
+        parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("removed in v2.0"),
+        "JSON error should contain migration hint"
+    );
+}
+
+#[test]
+fn test_no_flags_shows_overview() {
+    // No flags at all should show overview, not error
+    let (stdout, _stderr, code) = run_with_petstore(&[]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("API: Petstore API"),
+        "No flags should show overview"
+    );
+}
+
+#[test]
+fn test_used_by_flag() {
+    let (stdout, _stderr, code) = run_with_petstore(&["--schemas", "Pet", "--used-by"]);
+    assert_eq!(code, 0);
+    // Pet is used in GET /pets and POST /pets
+    assert!(
+        stdout.contains("/pets"),
+        "--used-by should show endpoints using Pet schema. Got:\n{}",
+        stdout
     );
 }
 
@@ -1209,7 +1353,7 @@ fn test_multi_file_overview_json() {
 
 #[test]
 fn test_multi_file_schemas_list() {
-    let (stdout, _stderr, code) = run_with_multi_file(&["schemas"]);
+    let (stdout, _stderr, code) = run_with_multi_file(&["--schemas"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Pet"),
@@ -1225,7 +1369,7 @@ fn test_multi_file_schemas_list() {
 
 #[test]
 fn test_multi_file_resources_list() {
-    let (stdout, _stderr, code) = run_with_multi_file(&["resources"]);
+    let (stdout, _stderr, code) = run_with_multi_file(&["--resources"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("pets") || stdout.contains("Pets"),
@@ -1252,7 +1396,7 @@ components:
     let spec_path = tmp.path().join("openapi.yaml");
     std::fs::write(&spec_path, spec_content).unwrap();
 
-    let (_stdout, stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "schemas"]);
+    let (_stdout, stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "--schemas"]);
 
     assert_ne!(code, 0, "Expected non-zero exit for missing ref file");
     assert!(
@@ -1285,7 +1429,7 @@ components:
     let spec_path = tmp.path().join("openapi.yaml");
     std::fs::write(&spec_path, spec_content).unwrap();
 
-    let (_stdout, stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "schemas"]);
+    let (_stdout, stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "--schemas"]);
 
     assert_ne!(
         code, 0,
@@ -1328,7 +1472,7 @@ components:
     let spec_path = tmp.path().join("openapi.yaml");
     std::fs::write(&spec_path, spec_content).unwrap();
 
-    let (stdout, _stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "schemas"]);
+    let (stdout, _stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "--schemas"]);
 
     assert_eq!(
         code, 0,

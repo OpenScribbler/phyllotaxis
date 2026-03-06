@@ -173,28 +173,28 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, _is_tty: bool) -> St
     if data.resource_count > 0 {
         writeln!(
             out,
-            "  {} resources    List all resource groups ({} groups, {} endpoints)",
+            "  {} --resources   List all resource groups ({} groups, {} endpoints)",
             bin_name, data.resource_count, data.endpoint_count
         )
         .unwrap();
     } else {
         writeln!(
             out,
-            "  {} resources    List all endpoints ({} endpoints across {} paths)",
+            "  {} --resources   List all endpoints ({} endpoints across {} paths)",
             bin_name, data.endpoint_count, data.path_count
         )
         .unwrap();
     }
     writeln!(
         out,
-        "  {} schemas      List all data models ({} available)",
+        "  {} --schemas     List all data models ({} available)",
         bin_name, data.schema_count
     )
     .unwrap();
-    writeln!(out, "  {} auth         Authentication details", bin_name).unwrap();
+    writeln!(out, "  {} --auth        Authentication details", bin_name).unwrap();
     writeln!(
         out,
-        "  {} callbacks    List all webhook callbacks ({} available)",
+        "  {} --callbacks   List all webhook callbacks ({} available)",
         bin_name, data.callback_count
     )
     .unwrap();
@@ -649,7 +649,7 @@ pub fn render_schema_list(names: &[String], _bin_name: &str, is_tty: bool) -> St
 
     if is_tty {
         out.push_str("\nDrill deeper:\n");
-        writeln!(out, "  phyll schemas <name>").unwrap();
+        writeln!(out, "  phyll --schemas <name>").unwrap();
     }
 
     out
@@ -699,14 +699,14 @@ pub fn render_schema_detail(
                 out.push_str("\nComposition: oneOf\n");
                 out.push_str("  One of:\n");
                 for v in variants {
-                    writeln!(out, "    phyll schemas {}", sanitize(v)).unwrap();
+                    writeln!(out, "    phyll --schemas {}", sanitize(v)).unwrap();
                 }
             }
             Composition::AnyOf(variants) => {
                 out.push_str("\nComposition: anyOf\n");
                 out.push_str("  Any of:\n");
                 for v in variants {
-                    writeln!(out, "    phyll schemas {}", sanitize(v)).unwrap();
+                    writeln!(out, "    phyll --schemas {}", sanitize(v)).unwrap();
                 }
             }
             Composition::Enum(values) => {
@@ -733,7 +733,7 @@ pub fn render_schema_detail(
             for (value, schema_name) in &disc.mapping {
                 writeln!(
                     out,
-                    "    {:<width$}  {} phyll schemas {}",
+                    "    {:<width$}  {} phyll --schemas {}",
                     sanitize(value),
                     arrow,
                     sanitize(schema_name),
@@ -771,7 +771,7 @@ pub fn render_schema_detail(
 
             out.push_str("\nRelated schemas:\n");
             for name in display {
-                writeln!(out, "  phyll schemas {}", name).unwrap();
+                writeln!(out, "  phyll --schemas {}", name).unwrap();
             }
             if let Some(limit) = related_limit {
                 if limit < total {
@@ -910,7 +910,7 @@ pub fn render_callback_list(
     }
     if is_tty {
         out.push_str("\nDrill deeper:\n");
-        writeln!(out, "  phyll callbacks <name>").unwrap();
+        writeln!(out, "  phyll --callbacks <name>").unwrap();
     }
     out
 }
@@ -965,7 +965,7 @@ pub fn render_callback_detail(
         if !schema_names.is_empty() {
             out.push_str("\nDrill deeper:\n");
             for name in schema_names {
-                writeln!(out, "  phyll schemas {}", sanitize(name)).unwrap();
+                writeln!(out, "  phyll --schemas {}", sanitize(name)).unwrap();
             }
         }
     }
@@ -1087,8 +1087,7 @@ pub fn render_search(
             if !e.resource_slug.is_empty() {
                 writeln!(
                     out,
-                    "    phyll resources {} {} {}",
-                    sanitize(&e.resource_slug),
+                    "    phyll --endpoint {} {}",
                     sanitize(&e.method),
                     sanitize(&e.path),
                 )
@@ -1146,7 +1145,7 @@ pub fn render_search(
             )
             .unwrap();
             if is_tty {
-                writeln!(out, "    phyll callbacks {}", sanitize(&cb.name)).unwrap();
+                writeln!(out, "    phyll --callbacks {}", sanitize(&cb.name)).unwrap();
             }
         }
     }
@@ -1173,7 +1172,7 @@ pub fn render_search(
                 .unwrap();
             }
             if is_tty {
-                writeln!(out, "    phyll auth").unwrap();
+                writeln!(out, "    phyll --auth").unwrap();
             }
         }
     }
@@ -1182,10 +1181,10 @@ pub fn render_search(
     if is_tty {
         let mut drill = Vec::new();
         for r in results.resources.iter().take(5) {
-            drill.push(format!("phyll resources {}", sanitize(&r.slug)));
+            drill.push(format!("phyll --resources {}", sanitize(&r.slug)));
         }
         for s in results.schemas.iter().take(5) {
-            drill.push(format!("phyll schemas {}", sanitize(&s.name)));
+            drill.push(format!("phyll --schemas {}", sanitize(&s.name)));
         }
         if !drill.is_empty() {
             out.push_str("\nDrill deeper:\n");
@@ -1318,8 +1317,7 @@ pub fn render_resource_detail(group: &ResourceGroup, _bin_name: &str, is_tty: bo
         for ep in &group.endpoints {
             writeln!(
                 out,
-                "  phyll resources {} {} {}",
-                sanitize(&group.slug),
+                "  phyll --endpoint {} {}",
                 sanitize(&ep.method),
                 sanitize(&ep.path)
             )
@@ -1361,7 +1359,7 @@ pub fn render_resource_list(groups: &[ResourceGroup], _bin_name: &str, is_tty: b
 
     if is_tty {
         out.push_str("\nDrill deeper:\n");
-        writeln!(out, "  phyll resources <name>").unwrap();
+        writeln!(out, "  phyll --resources <name>").unwrap();
     }
 
     out
@@ -1400,11 +1398,10 @@ pub fn render_schema_usage(
         out.push_str("  In request body:\n");
         for u in &request_body {
             writeln!(out, "    {:<6}  {}", u.method, sanitize(&u.path)).unwrap();
-            if let Some(ref slug) = u.resource_slug {
+            if u.resource_slug.is_some() {
                 writeln!(
                     out,
-                    "      phyll resources {} {} {}",
-                    sanitize(slug),
+                    "      phyll --endpoint {} {}",
                     u.method,
                     sanitize(&u.path)
                 )
@@ -1418,11 +1415,10 @@ pub fn render_schema_usage(
         out.push_str("  In response:\n");
         for u in &responses {
             writeln!(out, "    {:<6}  {}", u.method, sanitize(&u.path)).unwrap();
-            if let Some(ref slug) = u.resource_slug {
+            if u.resource_slug.is_some() {
                 writeln!(
                     out,
-                    "      phyll resources {} {} {}",
-                    sanitize(slug),
+                    "      phyll --endpoint {} {}",
                     u.method,
                     sanitize(&u.path)
                 )
@@ -1479,11 +1475,11 @@ mod tests {
         let output = render_overview(&data, "phyllotaxis", true);
         assert!(output.contains("API: Petstore API"), "Missing title");
         assert!(
-            output.contains("phyllotaxis resources"),
+            output.contains("phyllotaxis --resources"),
             "Missing resources command"
         );
         assert!(
-            output.contains("phyllotaxis schemas"),
+            output.contains("phyllotaxis --schemas"),
             "Missing schemas command"
         );
         assert!(
@@ -1589,7 +1585,7 @@ mod tests {
             "Missing drill deeper hint"
         );
         assert!(
-            output.contains("phyll resources <name>"),
+            output.contains("phyll --resources <name>"),
             "Missing drill command"
         );
     }
@@ -1649,7 +1645,7 @@ mod tests {
             "DELETE endpoint should be marked deprecated"
         );
         assert!(output.contains("Drill deeper:"));
-        assert!(output.contains("phyll resources pets"));
+        assert!(output.contains("phyll --endpoint"));
     }
 
     #[test]
@@ -1668,7 +1664,7 @@ mod tests {
         assert!(output.contains("  Owner"), "Missing Owner in list");
         assert!(output.contains("Drill deeper:"), "Missing drill deeper");
         assert!(
-            output.contains("phyll schemas <name>"),
+            output.contains("phyll --schemas <name>"),
             "Missing drill command"
         );
     }
@@ -1839,9 +1835,12 @@ mod tests {
 
         let output = render_schema_detail(&model, "phyllotaxis", false, None, true);
         assert!(output.contains("oneOf"), "Missing oneOf");
-        assert!(output.contains("phyll schemas Pet"), "Missing Pet variant");
         assert!(
-            output.contains("phyll schemas Owner"),
+            output.contains("phyll --schemas Pet"),
+            "Missing Pet variant"
+        );
+        assert!(
+            output.contains("phyll --schemas Owner"),
             "Missing Owner variant"
         );
     }
@@ -2027,7 +2026,7 @@ mod tests {
             security_schemes: vec![],
             callbacks: vec![],
             links: vec![],
-            drill_deeper: vec!["phyll schemas Pet".to_string()],
+            drill_deeper: vec!["phyll --schemas Pet".to_string()],
         };
 
         let output = render_endpoint_detail(&endpoint, true);
@@ -2036,7 +2035,7 @@ mod tests {
             "Missing drill deeper header"
         );
         assert!(
-            output.contains("phyll schemas Pet"),
+            output.contains("phyll --schemas Pet"),
             "Missing drill deeper command"
         );
     }
@@ -2059,7 +2058,7 @@ mod tests {
             security_schemes: vec![],
             callbacks: vec![],
             links: vec![],
-            drill_deeper: vec!["phyll schemas Pet".to_string()],
+            drill_deeper: vec!["phyll --schemas Pet".to_string()],
         };
 
         let output = render_endpoint_detail(&endpoint, false);
@@ -2119,7 +2118,7 @@ mod tests {
 
         let output = render_search(&results, "phyllotaxis", None, true);
         assert!(
-            output.contains("phyll resources pets GET /pets/{id}"),
+            output.contains("phyll --endpoint GET /pets/{id}"),
             "Should include drill-down command, got:\n{}",
             output
         );
@@ -2147,7 +2146,7 @@ mod tests {
 
         let output = render_search(&results, "phyllotaxis", None, true);
         assert!(
-            !output.contains("phyll resources  GET"),
+            !output.contains("phyll --endpoint  GET"),
             "Should not include drill command when slug is empty"
         );
     }
@@ -2174,7 +2173,7 @@ mod tests {
 
         let output = render_search(&results, "phyllotaxis", None, false);
         assert!(
-            output.contains("phyll resources pets GET /pets/{id}"),
+            output.contains("phyll --endpoint GET /pets/{id}"),
             "Drill command should appear even when piped (not TTY)"
         );
     }
@@ -2383,7 +2382,7 @@ mod tests {
                     operation_id: "getUser".to_string(),
                     parameters: vec!["userId = $response.body#/id".to_string()],
                     description: None,
-                    drill_command: Some("phyll resources users GET /users/{userId}".to_string()),
+                    drill_command: Some("phyll --endpoint GET /users/{userId}".to_string()),
                 }],
                 fields: vec![],
             }],
@@ -2394,7 +2393,7 @@ mod tests {
                 operation_id: "getUser".to_string(),
                 parameters: vec!["userId = $response.body#/id".to_string()],
                 description: None,
-                drill_command: Some("phyllotaxis resources users GET /users/{userId}".to_string()),
+                drill_command: Some("phyllotaxis --endpoint GET /users/{userId}".to_string()),
             }],
             drill_deeper: vec![],
         };
@@ -2552,7 +2551,7 @@ mod tests {
         assert!(output.contains("Callbacks"), "Missing header");
         assert!(output.contains("onEvent"), "Missing callback name");
         assert!(
-            output.contains("phyll callbacks <name>"),
+            output.contains("phyll --callbacks <name>"),
             "Missing drill hint"
         );
     }
