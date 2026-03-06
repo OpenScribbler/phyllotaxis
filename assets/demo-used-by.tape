@@ -18,6 +18,6 @@ Type "clear"
 Enter
 Show
 
-Type "phyll schemas Pet --used-by --spec petstore.yaml"
+Type "phyll --doc petstore.yaml --schemas Pet --used-by"
 Enter
 Sleep 5s

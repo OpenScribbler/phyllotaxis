@@ -1,4 +1,4 @@
-# Phyllotaxis demo — progressive disclosure through an OpenAPI spec
+# Phyllotaxis demo — progressive disclosure through an OpenAPI document
 
 Output assets/demo.gif
 
@@ -19,16 +19,16 @@ Enter
 Show
 
 # Level 0: Overview
-Type "phyll --spec petstore.yaml"
+Type "phyll --doc petstore.yaml"
 Enter
 Sleep 4s
 
 # Level 2: Resource detail (skip listing, jump to the interesting part)
-Type "phyll endpoints pets --spec petstore.yaml"
+Type "phyll --doc petstore.yaml --resources pets"
 Enter
 Sleep 4s
 
 # Level 3: Endpoint detail
-Type "phyll endpoints pets POST /pets --spec petstore.yaml"
+Type "phyll --doc petstore.yaml --endpoint POST /pets"
 Enter
 Sleep 5s

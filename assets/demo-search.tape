@@ -18,6 +18,6 @@ Type "clear"
 Enter
 Show
 
-Type 'phyll search "owner" --spec petstore.yaml'
+Type 'phyll --doc petstore.yaml search "owner"'
 Enter
 Sleep 5s

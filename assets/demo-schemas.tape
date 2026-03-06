@@ -19,16 +19,16 @@ Enter
 Show
 
 # List all schemas
-Type "phyll schemas --spec petstore.yaml"
+Type "phyll --doc petstore.yaml --schemas"
 Enter
 Sleep 3s
 
 # Drill into a schema
-Type "phyll schemas Pet --spec petstore.yaml"
+Type "phyll --doc petstore.yaml --schemas Pet"
 Enter
 Sleep 3s
 
 # Generate an example
-Type "phyll schemas Pet --example --spec petstore.yaml"
+Type "phyll --doc petstore.yaml --schemas Pet --example"
 Enter
 Sleep 4s
