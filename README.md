@@ -75,7 +75,7 @@ phyll --help
 
 OpenAPI specs get big fast. A mid-size API can have hundreds of endpoints, thousands of schema fields, and nested `$ref`s everywhere. Phyllotaxis gives you layers: start high, go deep only where you care.
 
-This is especially useful for LLM workflows. Instead of stuffing an entire spec into a prompt and burning tokens, you can give the model just the slice it needs: "show me the Pet schema" or "what does POST /pets expect?"
+This is especially useful for LLM workflows. Instead of stuffing an entire OpenAPI document into a prompt and burning tokens, you can give the model just the slice it needs: "show me the Pet schema" or "what does POST /pets expect?"
 
 ## Commands
 
@@ -93,13 +93,13 @@ This is especially useful for LLM workflows. Instead of stuffing an entire spec 
 | `phyll search <term>` | Search across everything |
 | `phyll callbacks` | Webhook callbacks |
 | `phyll callbacks <name>` | Callback detail |
-| `phyll init` | Auto-detect spec files and write config |
+| `phyll init` | Auto-detect OpenAPI documents and write config |
 | `phyll completions <shell>` | Shell completions (bash, zsh, fish, powershell, elvish) |
 
 ### Global Flags
 
 ```
---spec <name|path>           Override which spec file to use
+--doc <name|path>           Override which document to use
 --json                       Output JSON instead of text
 --expand                     Inline nested schemas recursively (max depth 5)
 --related-limit <n>          Cap how many related schemas to show
@@ -117,7 +117,7 @@ This is especially useful for LLM workflows. Instead of stuffing an entire spec 
 ### Level 0: Overview
 
 ```bash
-$ phyll --spec petstore.yaml
+$ phyll --doc petstore.yaml
 API: Petstore API
 Base URL: https://petstore.example.com
 Auth: bearerAuth
@@ -255,7 +255,7 @@ Placeholders are based on the field type and format:
 | `boolean` | `true` |
 | enum | First enum value |
 
-If the spec has `example` values on schemas or properties, those get used instead. For discriminated unions (oneOf with a discriminator), the `type` field gets set to the correct mapped value.
+If the document has `example` values on schemas or properties, those get used instead. For discriminated unions (oneOf with a discriminator), the `type` field gets set to the correct mapped value.
 
 ## Reverse Schema Lookup
 
@@ -372,10 +372,10 @@ Error: Method and path must be separate arguments.
 
 ## Spec Discovery
 
-Phyllotaxis finds your spec file in four ways (checked in this order):
+Phyllotaxis finds your OpenAPI document in four ways (checked in this order):
 
-1. **`--spec` flag** - named spec from config or a file path, always wins
-2. **`PHYLLOTAXIS_SPEC` env var** - set to a file path; errors if the file doesn't exist, ignored if empty
+1. **`--doc` flag** - named document from config or a file path, always wins
+2. **`PHYLLOTAXIS_DOCUMENT` env var** - set to a file path; errors if the file doesn't exist, ignored if empty
 3. **`.phyllotaxis.yaml` config** - created by `phyll init`, checked in the current directory and parents
 4. **Auto-detect** - scans for `*.yaml`/`*.yml`/`*.json` files with `openapi:` in the first 200 bytes
 
@@ -384,16 +384,16 @@ Run `phyll init` to set up a config:
 ```bash
 $ phyll init
 Detected framework: Astro
-Found spec candidates:
+Found document candidates:
   1. ./static/openapi.yaml
-Select a spec file (enter number) or type a path: 1
+Select a document (enter number) or type a path: 1
 Initialized. Run `phyll` to see your API overview.
 ```
 
 For non-interactive setup (CI, scripts), pass the path directly:
 
 ```bash
-$ phyll init --spec-path ./api/openapi.yaml
+$ phyll init --doc-path ./api/openapi.yaml
 ```
 
 ### Multi-Spec Projects
@@ -413,7 +413,7 @@ variables:
 Then pick one by name:
 
 ```bash
-$ phyll --spec internal resources
+$ phyll --doc internal resources
 ```
 
 The `variables` map fills in server URL template variables (e.g., `{tenant}` becomes `my-org` in base URL output).
@@ -433,7 +433,7 @@ phyllotaxis/
 ├── src/
 │   ├── main.rs              # CLI entry point (clap)
 │   ├── lib.rs               # Public crate API (re-exports)
-│   ├── spec.rs              # Config loading, spec resolution, parsing
+│   ├── spec.rs              # Config loading, document resolution, parsing
 │   ├── commands/
 │   │   ├── overview.rs      # L0: API overview
 │   │   ├── resources.rs     # L1-L3: resource groups, detail, endpoints

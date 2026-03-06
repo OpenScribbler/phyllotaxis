@@ -5,12 +5,12 @@ use anyhow::{bail, Context, Result};
 
 #[derive(Debug, serde::Deserialize, Default)]
 pub struct Config {
-    /// Single-spec path (backward compat). Ignored if `specs` is present.
-    pub spec: Option<String>,
-    /// Named specs map: name → relative path
+    /// Single document path (backward compat). Ignored if `documents` is present.
+    pub document: Option<String>,
+    /// Named documents map: name → relative path
     #[serde(default)]
-    pub specs: HashMap<String, String>,
-    /// Default spec name to use when `specs` is present and no --spec flag is given
+    pub documents: HashMap<String, String>,
+    /// Default document name to use when `documents` is present and no --doc flag is given
     pub default: Option<String>,
     #[serde(default)]
     pub variables: Option<HashMap<String, String>>,
@@ -44,19 +44,19 @@ pub fn load_config(start_dir: &Path) -> Option<(Config, PathBuf)> {
     }
 }
 
-/// Resolve the spec file path using the priority chain:
-/// 1. `--spec <name>` — look up in `specs` map in config
-/// 2. `--spec <path>` — treat as file path (resolve relative to cwd)
-/// 3. Config `default` → resolve from `specs` map
-/// 4. Config single `spec` field (backward compat)
+/// Resolve the document file path using the priority chain:
+/// 1. `--doc <name>` — look up in `documents` map in config
+/// 2. `--doc <path>` — treat as file path (resolve relative to cwd)
+/// 3. Config `default` → resolve from `documents` map
+/// 4. Config single `document` field (backward compat)
 /// 5. Auto-detect in start_dir (files containing "openapi:" in first 200 bytes)
 /// 6. Error with helpful message
-pub fn resolve_spec_path(
-    spec_flag: Option<&str>,
+pub fn resolve_doc_path(
+    doc_flag: Option<&str>,
     config: &Option<(Config, PathBuf)>,
     start_dir: &Path,
 ) -> Result<PathBuf> {
-    // Helper: resolve a spec path string relative to config_dir
+    // Helper: resolve a document path string relative to config_dir
     let resolve_named = |name: &str, config_dir: &Path| -> Option<PathBuf> {
         let path = PathBuf::from(name);
         let resolved = if path.is_absolute() {
@@ -71,25 +71,25 @@ pub fn resolve_spec_path(
         }
     };
 
-    // 1 & 2. --spec flag
-    if let Some(spec) = spec_flag {
-        // Try as a named spec in the specs map first
+    // 1 & 2. --doc flag
+    if let Some(doc) = doc_flag {
+        // Try as a named document in the documents map first
         if let Some((cfg, config_dir)) = config {
-            if let Some(named_path) = cfg.specs.get(spec) {
+            if let Some(named_path) = cfg.documents.get(doc) {
                 if let Some(resolved) = resolve_named(named_path, config_dir) {
                     return Ok(resolved);
                 }
                 bail!(
-                    "Named spec '{}' points to '{}' which was not found (resolved from {})",
-                    spec,
+                    "Named document '{}' points to '{}' which was not found (resolved from {})",
+                    doc,
                     named_path,
                     config_dir.display()
                 );
             }
         }
 
-        // Fall back to treating spec as a file path
-        let path = PathBuf::from(spec);
+        // Fall back to treating as a file path
+        let path = PathBuf::from(doc);
         let resolved = if path.is_absolute() {
             path
         } else {
@@ -98,13 +98,16 @@ pub fn resolve_spec_path(
         if resolved.is_file() {
             return Ok(resolved);
         }
-        bail!("Spec '{}' not found as a named spec or file path.", spec);
+        bail!(
+            "Document '{}' not found as a named document or file path.",
+            doc
+        );
     }
 
-    // 2b. PHYLLOTAXIS_SPEC env var
-    if let Ok(env_spec) = std::env::var("PHYLLOTAXIS_SPEC") {
-        if !env_spec.is_empty() {
-            let path = PathBuf::from(&env_spec);
+    // 2b. PHYLLOTAXIS_DOCUMENT env var
+    if let Ok(env_doc) = std::env::var("PHYLLOTAXIS_DOCUMENT") {
+        if !env_doc.is_empty() {
+            let path = PathBuf::from(&env_doc);
             let resolved = if path.is_absolute() {
                 path
             } else {
@@ -114,46 +117,49 @@ pub fn resolve_spec_path(
                 return Ok(resolved);
             }
             bail!(
-                "PHYLLOTAXIS_SPEC='{}' was set but the file was not found.",
-                env_spec
+                "PHYLLOTAXIS_DOCUMENT='{}' was set but the file was not found.",
+                env_doc
             );
         }
     }
 
-    // 3. Config default from specs map
+    // 3. Config default from documents map
     if let Some((cfg, config_dir)) = config {
-        if !cfg.specs.is_empty() {
+        if !cfg.documents.is_empty() {
             let default_name = cfg.default.as_deref().unwrap_or_default();
-            if let Some(named_path) = cfg.specs.get(default_name) {
+            if let Some(named_path) = cfg.documents.get(default_name) {
                 if let Some(resolved) = resolve_named(named_path, config_dir) {
                     return Ok(resolved);
                 }
             }
-            // No default set or default not found — error if multiple specs exist
+            // No default set or default not found — error if multiple documents exist
             if cfg.default.is_none() {
-                let names: Vec<&str> = cfg.specs.keys().map(String::as_str).collect();
+                let names: Vec<&str> = cfg.documents.keys().map(String::as_str).collect();
                 bail!(
-                    "Multiple specs configured but no default set. Use --spec <name>.\n\
+                    "Multiple documents configured but no default set. Use --doc <name>.\n\
                      Available: {}",
                     names.join(", ")
                 );
             }
-            bail!("Default spec '{}' not found in specs map.", default_name);
+            bail!(
+                "Default document '{}' not found in documents map.",
+                default_name
+            );
         }
 
-        // 4. Backward compat: single `spec` field
-        if let Some(spec) = &cfg.spec {
-            let path = PathBuf::from(spec);
+        // 4. Backward compat: single `document` field
+        if let Some(doc) = &cfg.document {
+            let path = PathBuf::from(doc);
             let resolved = if path.is_absolute() {
                 path
             } else {
-                config_dir.join(spec)
+                config_dir.join(doc)
             };
             if resolved.is_file() {
                 return Ok(resolved);
             }
             bail!(
-                "Spec file from config not found: {} (resolved from {})",
+                "Document from config not found: {} (resolved from {})",
                 resolved.display(),
                 config_dir.display()
             );
@@ -161,19 +167,19 @@ pub fn resolve_spec_path(
     }
 
     // 5. Auto-detect
-    if let Some(found) = auto_detect_spec(start_dir) {
+    if let Some(found) = auto_detect_document(start_dir) {
         return Ok(found);
     }
 
     // 6. Error
     bail!(
-        "No OpenAPI spec found. Tried:\n\
-         1. --spec flag (not provided)\n\
+        "No OpenAPI document found. Tried:\n\
+         1. --doc flag (not provided)\n\
          2. .phyllotaxis.yaml config ({})\n\
          3. Auto-detect in {} (no openapi files found)\n\n\
-         Run 'phyllotaxis init' to set up, or use --spec <path>.",
+         Run 'phyllotaxis init' to set up, or use --doc <path>.",
         if config.is_some() {
-            "found, no spec configured"
+            "found, no document configured"
         } else {
             "not found"
         },
@@ -182,24 +188,24 @@ pub fn resolve_spec_path(
 }
 
 #[derive(Debug)]
-pub struct LoadedSpec {
+pub struct LoadedDocument {
     pub api: openapiv3::OpenAPI,
     pub config: Config,
 }
 
-/// Load and parse an OpenAPI spec. Resolves the spec path, reads the file,
+/// Load and parse an OpenAPI document. Resolves the document path, reads the file,
 /// and parses it as YAML (falling back to JSON).
-pub fn load_spec(spec_flag: Option<&str>, start_dir: &Path) -> Result<LoadedSpec> {
+pub fn load_document(doc_flag: Option<&str>, start_dir: &Path) -> Result<LoadedDocument> {
     let config_result = load_config(start_dir);
-    let spec_path = resolve_spec_path(spec_flag, &config_result, start_dir)?;
+    let spec_path = resolve_doc_path(doc_flag, &config_result, start_dir)?;
 
-    // Guard against accidentally huge spec files (100 MB limit)
+    // Guard against accidentally huge document files (100 MB limit)
     let metadata = std::fs::metadata(&spec_path)
         .with_context(|| format!("Failed to stat {}", spec_path.display()))?;
-    const MAX_SPEC_SIZE: u64 = 100 * 1024 * 1024;
-    if metadata.len() > MAX_SPEC_SIZE {
+    const MAX_DOC_SIZE: u64 = 100 * 1024 * 1024;
+    if metadata.len() > MAX_DOC_SIZE {
         bail!(
-            "Spec file {} is too large ({:.1} MB, max 100 MB).",
+            "Document {} is too large ({:.1} MB, max 100 MB).",
             spec_path.display(),
             metadata.len() as f64 / (1024.0 * 1024.0)
         );
@@ -226,11 +232,11 @@ pub fn load_spec(spec_flag: Option<&str>, start_dir: &Path) -> Result<LoadedSpec
 
     let config = config_result.map(|(c, _)| c).unwrap_or_default();
 
-    Ok(LoadedSpec { api, config })
+    Ok(LoadedDocument { api, config })
 }
 
-/// Search for OpenAPI spec files by peeking at file contents.
-fn auto_detect_spec(dir: &Path) -> Option<PathBuf> {
+/// Search for OpenAPI document files by peeking at file contents.
+fn auto_detect_document(dir: &Path) -> Option<PathBuf> {
     let candidates = [
         "openapi.yaml",
         "openapi.yml",
@@ -494,12 +500,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "spec: ./openapi.yaml\n",
+            "document: ./openapi.yaml\n",
         )
         .unwrap();
 
         let (config, config_dir) = load_config(tmp.path()).expect("should find config");
-        assert_eq!(config.spec.as_deref(), Some("./openapi.yaml"));
+        assert_eq!(config.document.as_deref(), Some("./openapi.yaml"));
         assert_eq!(config_dir, tmp.path());
     }
 
@@ -508,7 +514,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "spec: ./openapi.yaml\nvariables:\n  tenant: acme-corp\n",
+            "document: ./openapi.yaml\nvariables:\n  tenant: acme-corp\n",
         )
         .unwrap();
 
@@ -530,12 +536,12 @@ mod tests {
         // Also write a config pointing to a different file
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "spec: ./other-spec.yaml\n",
+            "document: ./other-doc.yaml\n",
         )
         .unwrap();
 
         let config = load_config(tmp.path());
-        let result = resolve_spec_path(Some(spec_path.to_str().unwrap()), &config, tmp.path());
+        let result = resolve_doc_path(Some(spec_path.to_str().unwrap()), &config, tmp.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), spec_path);
     }
@@ -551,12 +557,12 @@ mod tests {
         .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "spec: ./openapi.yaml\n",
+            "document: ./openapi.yaml\n",
         )
         .unwrap();
 
         let config = load_config(tmp.path());
-        let result = resolve_spec_path(None, &config, tmp.path());
+        let result = resolve_doc_path(None, &config, tmp.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), spec_path);
     }
@@ -571,7 +577,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = resolve_spec_path(None, &None, tmp.path());
+        let result = resolve_doc_path(None, &None, tmp.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), spec_path);
     }
@@ -579,10 +585,10 @@ mod tests {
     #[test]
     fn test_resolve_error_when_nothing_found() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = resolve_spec_path(None, &None, tmp.path());
+        let result = resolve_doc_path(None, &None, tmp.path());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("No OpenAPI spec found"), "Error: {}", err);
+        assert!(err.contains("No OpenAPI document found"), "Error: {}", err);
     }
 
     #[test]
@@ -592,18 +598,18 @@ mod tests {
         fs::create_dir_all(&sub).unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "spec: ./openapi.yaml\n",
+            "document: ./openapi.yaml\n",
         )
         .unwrap();
 
         let (config, config_dir) = load_config(&sub).expect("should find config by walking up");
-        assert_eq!(config.spec.as_deref(), Some("./openapi.yaml"));
+        assert_eq!(config.document.as_deref(), Some("./openapi.yaml"));
         assert_eq!(config_dir, tmp.path());
     }
 
     #[test]
     fn test_parse_petstore() {
-        let result = load_spec(
+        let result = load_document(
             Some("tests/fixtures/petstore.yaml"),
             std::path::Path::new("."),
         );
@@ -618,7 +624,7 @@ mod tests {
         let bad_path = tmp.path().join("bad.yaml");
         fs::write(&bad_path, "this is not valid openapi yaml {{{").unwrap();
 
-        let result = load_spec(Some(bad_path.to_str().unwrap()), tmp.path());
+        let result = load_document(Some(bad_path.to_str().unwrap()), tmp.path());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Failed to parse"), "Error: {}", err);
@@ -654,13 +660,17 @@ mod tests {
         .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "specs:\n  public: ./public.yaml\ndefault: public\n",
+            "documents:\n  public: ./public.yaml\ndefault: public\n",
         )
         .unwrap();
 
         let config = load_config(tmp.path());
-        let result = resolve_spec_path(Some("public"), &config, tmp.path());
-        assert!(result.is_ok(), "Should resolve named spec: {:?}", result);
+        let result = resolve_doc_path(Some("public"), &config, tmp.path());
+        assert!(
+            result.is_ok(),
+            "Should resolve named document: {:?}",
+            result
+        );
         assert_eq!(result.unwrap(), spec_path);
     }
 
@@ -675,14 +685,14 @@ mod tests {
         .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "specs:\n  public: ./public.yaml\ndefault: public\n",
+            "documents:\n  public: ./public.yaml\ndefault: public\n",
         )
         .unwrap();
 
         let config = load_config(tmp.path());
         // No --spec flag: should use default
-        let result = resolve_spec_path(None, &config, tmp.path());
-        assert!(result.is_ok(), "Should use default spec: {:?}", result);
+        let result = resolve_doc_path(None, &config, tmp.path());
+        assert!(result.is_ok(), "Should use default document: {:?}", result);
         assert_eq!(result.unwrap(), spec_path);
     }
 
@@ -703,19 +713,19 @@ mod tests {
         .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "specs:\n  a: ./a.yaml\n  b: ./b.yaml\n",
+            "documents:\n  a: ./a.yaml\n  b: ./b.yaml\n",
         )
         .unwrap();
 
         let config = load_config(tmp.path());
-        let result = resolve_spec_path(None, &config, tmp.path());
+        let result = resolve_doc_path(None, &config, tmp.path());
         assert!(
             result.is_err(),
-            "Should error when multiple specs and no default"
+            "Should error when multiple documents and no default"
         );
         assert!(
-            result.unwrap_err().to_string().contains("--spec"),
-            "Error should mention --spec"
+            result.unwrap_err().to_string().contains("--doc"),
+            "Error should mention --doc"
         );
     }
 
@@ -728,13 +738,17 @@ mod tests {
             "openapi: \"3.0.0\"\ninfo:\n  title: API\n  version: \"1.0\"\npaths: {}\n",
         )
         .unwrap();
-        fs::write(tmp.path().join(".phyllotaxis.yaml"), "spec: ./api.yaml\n").unwrap();
+        fs::write(
+            tmp.path().join(".phyllotaxis.yaml"),
+            "document: ./api.yaml\n",
+        )
+        .unwrap();
 
         let config = load_config(tmp.path());
-        let result = resolve_spec_path(None, &config, tmp.path());
+        let result = resolve_doc_path(None, &config, tmp.path());
         assert!(
             result.is_ok(),
-            "Single spec: field should still work: {:?}",
+            "Single document: field should still work: {:?}",
             result
         );
         assert_eq!(result.unwrap(), spec_path);
@@ -751,9 +765,9 @@ mod tests {
         )
         .unwrap();
 
-        unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", spec_path.to_str().unwrap()) };
-        let result = resolve_spec_path(None, &None, tmp.path());
-        unsafe { std::env::remove_var("PHYLLOTAXIS_SPEC") };
+        unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", spec_path.to_str().unwrap()) };
+        let result = resolve_doc_path(None, &None, tmp.path());
+        unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(result.is_ok(), "Env var should resolve: {:?}", result);
         assert_eq!(result.unwrap(), spec_path);
@@ -776,9 +790,9 @@ mod tests {
         )
         .unwrap();
 
-        unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", env_spec.to_str().unwrap()) };
-        let result = resolve_spec_path(Some(flag_spec.to_str().unwrap()), &None, tmp.path());
-        unsafe { std::env::remove_var("PHYLLOTAXIS_SPEC") };
+        unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", env_spec.to_str().unwrap()) };
+        let result = resolve_doc_path(Some(flag_spec.to_str().unwrap()), &None, tmp.path());
+        unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), flag_spec, "Flag should win over env var");
@@ -802,14 +816,14 @@ mod tests {
         .unwrap();
         fs::write(
             tmp.path().join(".phyllotaxis.yaml"),
-            "spec: ./config-spec.yaml\n",
+            "document: ./config-doc.yaml\n",
         )
         .unwrap();
 
         let config = load_config(tmp.path());
-        unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", env_spec.to_str().unwrap()) };
-        let result = resolve_spec_path(None, &config, tmp.path());
-        unsafe { std::env::remove_var("PHYLLOTAXIS_SPEC") };
+        unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", env_spec.to_str().unwrap()) };
+        let result = resolve_doc_path(None, &config, tmp.path());
+        unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), env_spec, "Env var should win over config");
@@ -820,16 +834,19 @@ mod tests {
     fn test_resolve_env_var_not_found_is_error() {
         let tmp = tempfile::tempdir().unwrap();
 
-        unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", "/nonexistent/path.yaml") };
-        let result = resolve_spec_path(None, &None, tmp.path());
-        unsafe { std::env::remove_var("PHYLLOTAXIS_SPEC") };
+        unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", "/nonexistent/path.yaml") };
+        let result = resolve_doc_path(None, &None, tmp.path());
+        unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(
             result.is_err(),
             "Should error when env var points to missing file"
         );
         assert!(
-            result.unwrap_err().to_string().contains("PHYLLOTAXIS_SPEC"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("PHYLLOTAXIS_DOCUMENT"),
             "Error should mention PHYLLOTAXIS_SPEC"
         );
     }
@@ -845,9 +862,9 @@ mod tests {
         )
         .unwrap();
 
-        unsafe { std::env::set_var("PHYLLOTAXIS_SPEC", "") };
-        let result = resolve_spec_path(None, &None, tmp.path());
-        unsafe { std::env::remove_var("PHYLLOTAXIS_SPEC") };
+        unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", "") };
+        let result = resolve_doc_path(None, &None, tmp.path());
+        unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(
             result.is_ok(),

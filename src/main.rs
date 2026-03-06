@@ -8,7 +8,7 @@ use std::path::PathBuf;
 #[command(
     name = "phyllotaxis",
     version,
-    about = "Progressive disclosure for OpenAPI specs (alias: phyll)"
+    about = "Progressive disclosure for OpenAPI documents (alias: phyll)"
 )]
 struct Cli {
     /// OpenAPI document path (overrides config/env/auto-detect)
@@ -58,9 +58,9 @@ struct Cli {
     #[arg(long)]
     example: bool,
 
-    /// Named spec from config, or path override
+    /// Named document from config, or path override
     #[arg(long)]
-    spec: Option<PathBuf>,
+    doc: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -76,11 +76,11 @@ enum Commands {
         #[arg(long)]
         limit: Option<usize>,
     },
-    /// Interactive setup — detect spec and write config
+    /// Interactive setup — detect document and write config
     Init {
-        /// Spec file path — skips interactive prompt when provided
+        /// Document file path — skips interactive prompt when provided
         #[arg(long)]
-        spec_path: Option<PathBuf>,
+        doc_path: Option<PathBuf>,
     },
     /// Generate shell completion scripts
     #[command(hide = true)]
@@ -154,7 +154,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true)
         && std::env::var("CLICOLOR").map(|v| v != "0").unwrap_or(true);
 
-    // Completions does not need a spec — generate and exit immediately.
+    // Completions does not need a document — generate and exit immediately.
     if let Some(Commands::Completions { shell }) = cli.command {
         use clap::CommandFactory;
         use clap_complete::generate;
@@ -165,8 +165,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     }
 
     // Init does not support --json; it's interactive and always writes to .phyllotaxis.yaml
-    if let Some(Commands::Init { spec_path }) = &cli.command {
-        commands::init::run_init(&cwd, spec_path.as_deref())?;
+    if let Some(Commands::Init { doc_path }) = &cli.command {
+        commands::init::run_init(&cwd, doc_path.as_deref())?;
         return Ok(());
     }
 
@@ -201,13 +201,13 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         }
     }
 
-    // Resolve document: positional > --spec > config/env/auto-detect
+    // Resolve document: positional > --doc > config/env/auto-detect
     let doc_path = cli
         .document
         .as_ref()
-        .or(cli.spec.as_ref())
+        .or(cli.doc.as_ref())
         .map(|p| p.to_string_lossy().to_string());
-    let loaded = spec::load_spec(doc_path.as_deref(), &cwd)?;
+    let loaded = spec::load_document(doc_path.as_deref(), &cwd)?;
 
     // Handle search subcommand
     if let Some(Commands::Search { term, limit }) = &cli.command {
@@ -260,25 +260,59 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         is_tty,
     };
 
-    // Process each flag independently
+    // Process each flag, collecting JSON outputs for multi-flag merging
+    let mut json_parts: Vec<(&str, String)> = Vec::new();
+
     if let Some(ref name) = cli.resources {
-        handle_resources(&ctx, name)?;
+        if let Some(json) = handle_resources(&ctx, name)? {
+            json_parts.push(("resources", json));
+        }
     }
 
     if let Some(ref name) = cli.schemas {
-        handle_schemas(&ctx, name, cli.used_by, cli.example, cli.related_limit)?;
+        if let Some(json) = handle_schemas(&ctx, name, cli.used_by, cli.example, cli.related_limit)?
+        {
+            json_parts.push(("schemas", json));
+        }
     }
 
     if cli.auth {
-        handle_auth(&ctx)?;
+        if let Some(json) = handle_auth(&ctx)? {
+            json_parts.push(("auth", json));
+        }
     }
 
     if let Some(ref name) = cli.callbacks {
-        handle_callbacks(&ctx, name)?;
+        if let Some(json) = handle_callbacks(&ctx, name)? {
+            json_parts.push(("callbacks", json));
+        }
     }
 
     if let Some(ref args) = cli.endpoint {
-        handle_endpoint(&ctx, args, cli.context, cli.example)?;
+        if let Some(json) = handle_endpoint(&ctx, args, cli.context, cli.example)? {
+            json_parts.push(("endpoint", json));
+        }
+    }
+
+    // In JSON mode: single flag preserves existing shape, multi-flag merges under keys
+    if ctx.json && !json_parts.is_empty() {
+        if json_parts.len() == 1 {
+            println!("{}", json_parts.into_iter().next().unwrap().1);
+        } else {
+            let mut doc = serde_json::Map::new();
+            for (key, json_str) in json_parts {
+                let val: serde_json::Value = serde_json::from_str(&json_str)
+                    .context("Internal error: invalid JSON from renderer")?;
+                doc.insert(key.to_string(), val);
+            }
+            let output = if is_tty {
+                serde_json::to_string_pretty(&doc)
+            } else {
+                serde_json::to_string(&doc)
+            }
+            .context("Internal error: failed to serialize merged JSON")?;
+            println!("{}", output);
+        }
     }
 
     Ok(())
@@ -288,14 +322,27 @@ fn run(cli: Cli) -> anyhow::Result<()> {
 
 /// Common rendering context passed to all flag handlers.
 struct Ctx<'a> {
-    loaded: &'a spec::LoadedSpec,
+    loaded: &'a spec::LoadedDocument,
     json: bool,
     expand: bool,
     bin_name: &'a str,
     is_tty: bool,
 }
 
-fn handle_resources(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
+impl Ctx<'_> {
+    /// In text mode, print immediately and return None.
+    /// In JSON mode, return the string for collection into a merged document.
+    fn emit(&self, output: String) -> Option<String> {
+        if self.json {
+            Some(output)
+        } else {
+            println!("{}", output);
+            None
+        }
+    }
+}
+
+fn handle_resources(ctx: &Ctx, name: &str) -> anyhow::Result<Option<String>> {
     if name.is_empty() {
         let groups = commands::resources::extract_resource_groups(&ctx.loaded.api);
         let output = if ctx.json {
@@ -303,40 +350,38 @@ fn handle_resources(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
         } else {
             render::text::render_resource_list(&groups, ctx.bin_name, ctx.is_tty)
         };
-        println!("{}", output);
-    } else {
-        match commands::resources::get_resource_detail(&ctx.loaded.api, name) {
-            Some(group) => {
-                let output = if ctx.json {
-                    render::json::render_resource_detail(&group, ctx.bin_name, ctx.is_tty)
-                } else {
-                    render::text::render_resource_detail(&group, ctx.bin_name, ctx.is_tty)
-                };
-                println!("{}", output);
+        return Ok(ctx.emit(output));
+    }
+    match commands::resources::get_resource_detail(&ctx.loaded.api, name) {
+        Some(group) => {
+            let output = if ctx.json {
+                render::json::render_resource_detail(&group, ctx.bin_name, ctx.is_tty)
+            } else {
+                render::text::render_resource_detail(&group, ctx.bin_name, ctx.is_tty)
+            };
+            Ok(ctx.emit(output))
+        }
+        None => {
+            let msg = format!("Resource '{}' not found.", name);
+            let groups = commands::resources::extract_resource_groups(&ctx.loaded.api);
+            let slugs = commands::resources::suggest_similar(&groups, name);
+            if ctx.json {
+                let cmds: Vec<String> = slugs
+                    .iter()
+                    .map(|s| format!("{} --resources {}", ctx.bin_name, s))
+                    .collect();
+                return Err(PreformattedError(json_error_with_suggestions(&msg, &cmds)).into());
             }
-            None => {
-                let msg = format!("Resource '{}' not found.", name);
-                let groups = commands::resources::extract_resource_groups(&ctx.loaded.api);
-                let slugs = commands::resources::suggest_similar(&groups, name);
-                if ctx.json {
-                    let cmds: Vec<String> = slugs
-                        .iter()
-                        .map(|s| format!("{} --resources {}", ctx.bin_name, s))
-                        .collect();
-                    return Err(PreformattedError(json_error_with_suggestions(&msg, &cmds)).into());
+            let mut full_msg = msg;
+            if !slugs.is_empty() {
+                full_msg.push_str("\nDid you mean:");
+                for s in &slugs {
+                    full_msg.push_str(&format!("\n  {} --resources {}", ctx.bin_name, s));
                 }
-                let mut full_msg = msg;
-                if !slugs.is_empty() {
-                    full_msg.push_str("\nDid you mean:");
-                    for s in &slugs {
-                        full_msg.push_str(&format!("\n  {} --resources {}", ctx.bin_name, s));
-                    }
-                }
-                anyhow::bail!("{}", full_msg);
             }
+            anyhow::bail!("{}", full_msg);
         }
     }
-    Ok(())
 }
 
 fn handle_schemas(
@@ -345,7 +390,7 @@ fn handle_schemas(
     used_by: bool,
     example: bool,
     related_limit: Option<usize>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     if name.is_empty() {
         let names = commands::schemas::list_schemas(&ctx.loaded.api);
         let output = if ctx.json {
@@ -353,8 +398,9 @@ fn handle_schemas(
         } else {
             render::text::render_schema_list(&names, ctx.bin_name, ctx.is_tty)
         };
-        println!("{}", output);
-    } else if used_by {
+        return Ok(ctx.emit(output));
+    }
+    if used_by {
         if commands::schemas::find_schema(&ctx.loaded.api, name).is_none() {
             let msg = format!("Schema '{}' not found.", name);
             let similar = commands::schemas::suggest_similar_schemas(&ctx.loaded.api, name);
@@ -380,8 +426,9 @@ fn handle_schemas(
         } else {
             render::text::render_schema_usage(name, &usages, ctx.is_tty)
         };
-        println!("{}", output);
-    } else if example {
+        return Ok(ctx.emit(output));
+    }
+    if example {
         match commands::examples::generate_example(&ctx.loaded.api, name, false) {
             Some(ex) => {
                 let output = if ctx.json {
@@ -389,7 +436,7 @@ fn handle_schemas(
                 } else {
                     render::text::render_example(name, &ex, ctx.is_tty)
                 };
-                println!("{}", output);
+                return Ok(ctx.emit(output));
             }
             None => {
                 let msg = format!("Schema '{}' not found.", name);
@@ -399,58 +446,55 @@ fn handle_schemas(
                 anyhow::bail!("{}", msg);
             }
         }
-    } else {
-        match commands::schemas::build_schema_model(&ctx.loaded.api, name, ctx.expand, 5) {
-            Some(model) => {
-                let output = if ctx.json {
-                    render::json::render_schema_detail(&model, ctx.bin_name, ctx.is_tty)
-                } else {
-                    render::text::render_schema_detail(
-                        &model,
-                        ctx.bin_name,
-                        ctx.expand,
-                        related_limit,
-                        ctx.is_tty,
-                    )
-                };
-                println!("{}", output);
+    }
+    match commands::schemas::build_schema_model(&ctx.loaded.api, name, ctx.expand, 5) {
+        Some(model) => {
+            let output = if ctx.json {
+                render::json::render_schema_detail(&model, ctx.bin_name, ctx.is_tty)
+            } else {
+                render::text::render_schema_detail(
+                    &model,
+                    ctx.bin_name,
+                    ctx.expand,
+                    related_limit,
+                    ctx.is_tty,
+                )
+            };
+            Ok(ctx.emit(output))
+        }
+        None => {
+            let msg = format!("Schema '{}' not found.", name);
+            let similar = commands::schemas::suggest_similar_schemas(&ctx.loaded.api, name);
+            if ctx.json {
+                let cmds: Vec<String> = similar
+                    .iter()
+                    .map(|s| format!("{} --schemas {}", ctx.bin_name, s))
+                    .collect();
+                return Err(PreformattedError(json_error_with_suggestions(&msg, &cmds)).into());
             }
-            None => {
-                let msg = format!("Schema '{}' not found.", name);
-                let similar = commands::schemas::suggest_similar_schemas(&ctx.loaded.api, name);
-                if ctx.json {
-                    let cmds: Vec<String> = similar
-                        .iter()
-                        .map(|s| format!("{} --schemas {}", ctx.bin_name, s))
-                        .collect();
-                    return Err(PreformattedError(json_error_with_suggestions(&msg, &cmds)).into());
+            let mut full_msg = msg;
+            if !similar.is_empty() {
+                full_msg.push_str("\nDid you mean:");
+                for s in &similar {
+                    full_msg.push_str(&format!("\n  {} --schemas {}", ctx.bin_name, s));
                 }
-                let mut full_msg = msg;
-                if !similar.is_empty() {
-                    full_msg.push_str("\nDid you mean:");
-                    for s in &similar {
-                        full_msg.push_str(&format!("\n  {} --schemas {}", ctx.bin_name, s));
-                    }
-                }
-                anyhow::bail!("{}", full_msg);
             }
+            anyhow::bail!("{}", full_msg);
         }
     }
-    Ok(())
 }
 
-fn handle_auth(ctx: &Ctx) -> anyhow::Result<()> {
+fn handle_auth(ctx: &Ctx) -> anyhow::Result<Option<String>> {
     let model = commands::auth::build_auth_model(&ctx.loaded.api);
     let output = if ctx.json {
         render::json::render_auth(&model, ctx.bin_name, ctx.is_tty)
     } else {
         render::text::render_auth(&model, ctx.bin_name, ctx.is_tty)
     };
-    println!("{}", output);
-    Ok(())
+    Ok(ctx.emit(output))
 }
 
-fn handle_callbacks(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
+fn handle_callbacks(ctx: &Ctx, name: &str) -> anyhow::Result<Option<String>> {
     let callbacks = commands::callbacks::list_all_callbacks(&ctx.loaded.api);
     if name.is_empty() {
         let output = if ctx.json {
@@ -458,68 +502,112 @@ fn handle_callbacks(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
         } else {
             render::text::render_callback_list(&callbacks, ctx.bin_name, ctx.is_tty)
         };
-        println!("{}", output);
-    } else {
-        match commands::callbacks::find_callback(&ctx.loaded.api, name) {
-            Some(cb) => {
-                let output = if ctx.json {
-                    render::json::render_callback_detail(&cb, ctx.bin_name, ctx.is_tty)
-                } else {
-                    render::text::render_callback_detail(&cb, ctx.bin_name, ctx.is_tty)
-                };
-                println!("{}", output);
+        return Ok(ctx.emit(output));
+    }
+    match commands::callbacks::find_callback(&ctx.loaded.api, name) {
+        Some(cb) => {
+            let output = if ctx.json {
+                render::json::render_callback_detail(&cb, ctx.bin_name, ctx.is_tty)
+            } else {
+                render::text::render_callback_detail(&cb, ctx.bin_name, ctx.is_tty)
+            };
+            Ok(ctx.emit(output))
+        }
+        None => {
+            let msg = format!("Callback '{}' not found.", name);
+            let similar = commands::callbacks::suggest_similar_callbacks(&callbacks, name);
+            if ctx.json {
+                let cmds: Vec<String> = similar
+                    .iter()
+                    .map(|s| format!("{} --callbacks {}", ctx.bin_name, s))
+                    .collect();
+                return Err(PreformattedError(json_error_with_suggestions(&msg, &cmds)).into());
             }
-            None => {
-                let msg = format!("Callback '{}' not found.", name);
-                let similar = commands::callbacks::suggest_similar_callbacks(&callbacks, name);
-                if ctx.json {
-                    let cmds: Vec<String> = similar
-                        .iter()
-                        .map(|s| format!("{} --callbacks {}", ctx.bin_name, s))
-                        .collect();
-                    return Err(PreformattedError(json_error_with_suggestions(&msg, &cmds)).into());
+            let mut full_msg = msg;
+            if !similar.is_empty() {
+                full_msg.push_str("\nDid you mean:");
+                for s in &similar {
+                    full_msg.push_str(&format!("\n  {} --callbacks {}", ctx.bin_name, s));
                 }
-                let mut full_msg = msg;
-                if !similar.is_empty() {
-                    full_msg.push_str("\nDid you mean:");
-                    for s in &similar {
-                        full_msg.push_str(&format!("\n  {} --callbacks {}", ctx.bin_name, s));
-                    }
-                }
-                anyhow::bail!("{}", full_msg);
             }
+            anyhow::bail!("{}", full_msg);
         }
     }
-    Ok(())
 }
 
-fn handle_endpoint(ctx: &Ctx, args: &[String], context: bool, example: bool) -> anyhow::Result<()> {
+fn handle_endpoint(
+    ctx: &Ctx,
+    args: &[String],
+    context: bool,
+    example: bool,
+) -> anyhow::Result<Option<String>> {
     let method = &args[0];
     let path = &args[1];
+    let expand = ctx.expand || context;
 
     match commands::resources::get_endpoint_detail(
         &ctx.loaded.api,
         method,
         path,
-        ctx.expand,
+        expand,
         ctx.bin_name,
     ) {
         Some(ep) => {
-            let output = if ctx.json {
-                render::json::render_endpoint_detail(&ep, ctx.is_tty)
-            } else {
-                render::text::render_endpoint_detail(&ep, ctx.is_tty)
+            if !ctx.json {
+                // Text mode: print each section immediately
+                let output = render::text::render_endpoint_detail(&ep, ctx.is_tty);
+                println!("{}", output);
+                if context {
+                    let related =
+                        commands::resources::collect_related_schemas(&ctx.loaded.api, method, path);
+                    println!(
+                        "{}",
+                        render::text::render_related_schemas(&related, ctx.is_tty)
+                    );
+                }
+                if example {
+                    if let Some(ref body) = ep.request_body {
+                        if let Some(ref schema_name) = body.schema_ref {
+                            if let Some(ex) = commands::examples::generate_example(
+                                &ctx.loaded.api,
+                                schema_name,
+                                false,
+                            ) {
+                                println!(
+                                    "{}",
+                                    render::text::render_example(schema_name, &ex, ctx.is_tty)
+                                );
+                            }
+                        }
+                    }
+                }
+                return Ok(None);
+            }
+
+            // JSON mode: merge endpoint + context + example into one object
+            let ep_json: serde_json::Value =
+                serde_json::from_str(&render::json::render_endpoint_detail(&ep, false))
+                    .context("Internal error: invalid endpoint JSON")?;
+            let mut merged = match ep_json {
+                serde_json::Value::Object(map) => map,
+                other => {
+                    let mut m = serde_json::Map::new();
+                    m.insert("detail".to_string(), other);
+                    m
+                }
             };
-            println!("{}", output);
+
             if context {
                 let related =
                     commands::resources::collect_related_schemas(&ctx.loaded.api, method, path);
-                let context_output = if ctx.json {
-                    render::json::render_related_schemas(&related, ctx.is_tty)
-                } else {
-                    render::text::render_related_schemas(&related, ctx.is_tty)
-                };
-                println!("{}", context_output);
+                let val: serde_json::Value =
+                    serde_json::from_str(&render::json::render_related_schemas(&related, false))
+                        .context("Internal error: invalid related schemas JSON")?;
+                if let serde_json::Value::Object(obj) = val {
+                    for (k, v) in obj {
+                        merged.insert(k, v);
+                    }
+                }
             }
             if example {
                 if let Some(ref body) = ep.request_body {
@@ -529,20 +617,26 @@ fn handle_endpoint(ctx: &Ctx, args: &[String], context: bool, example: bool) -> 
                             schema_name,
                             false,
                         ) {
-                            let output = if ctx.json {
-                                render::json::render_example(schema_name, &ex, ctx.is_tty)
-                            } else {
-                                render::text::render_example(schema_name, &ex, ctx.is_tty)
-                            };
-                            println!("{}", output);
+                            let val: serde_json::Value = serde_json::from_str(
+                                &render::json::render_example(schema_name, &ex, false),
+                            )
+                            .context("Internal error: invalid example JSON")?;
+                            merged.insert("example".to_string(), val);
                         }
                     }
                 }
             }
+
+            let output = if ctx.is_tty {
+                serde_json::to_string_pretty(&merged)
+            } else {
+                serde_json::to_string(&merged)
+            }
+            .context("Internal error: failed to serialize endpoint JSON")?;
+            Ok(Some(output))
         }
         None => {
             anyhow::bail!("Endpoint {} {} not found.", method.to_uppercase(), path);
         }
     }
-    Ok(())
 }

@@ -43,42 +43,44 @@ static FRAMEWORKS: &[Framework] = &[
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct PhyllotaxisConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    spec: Option<String>,
+    document: Option<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
-    specs: HashMap<String, String>,
+    documents: HashMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     default: Option<String>,
 }
 
-/// Write a fresh single-spec config atomically.
+/// Write a fresh single-document config atomically.
 /// Extracted for testability.
-pub fn write_init_config(config_path: &Path, spec_path: &str) -> std::io::Result<()> {
+pub fn write_init_config(config_path: &Path, doc_path: &str) -> std::io::Result<()> {
     let config = PhyllotaxisConfig {
-        spec: Some(spec_path.to_string()),
+        document: Some(doc_path.to_string()),
         ..Default::default()
     };
     let content = serde_yaml_ng::to_string(&config).map_err(std::io::Error::other)?;
     atomic_write(config_path, &content)
 }
 
-/// Add a named spec to an existing config file, using proper YAML round-trip.
+/// Add a named document to an existing config file, using proper YAML round-trip.
 /// Extracted for testability.
-pub fn write_add_spec(config_path: &Path, name: &str, spec_path: &str) -> std::io::Result<()> {
+pub fn write_add_document(config_path: &Path, name: &str, doc_path: &str) -> std::io::Result<()> {
     let existing = std::fs::read_to_string(config_path)?;
     let mut config: PhyllotaxisConfig = serde_yaml_ng::from_str(&existing)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-    if config.specs.is_empty() {
-        // Migrate from single `spec:` to `specs:` map
-        if let Some(old_spec) = config.spec.take() {
-            config.specs.insert("default".to_string(), old_spec);
+    if config.documents.is_empty() {
+        // Migrate from single `document:` to `documents:` map
+        if let Some(old_doc) = config.document.take() {
+            config.documents.insert("default".to_string(), old_doc);
             if config.default.is_none() {
                 config.default = Some("default".to_string());
             }
         }
     }
 
-    config.specs.insert(name.to_string(), spec_path.to_string());
+    config
+        .documents
+        .insert(name.to_string(), doc_path.to_string());
 
     let content = serde_yaml_ng::to_string(&config).map_err(std::io::Error::other)?;
     atomic_write(config_path, &content)
@@ -171,11 +173,11 @@ pub fn find_spec_candidates(dir: &Path, framework: Option<&str>) -> Vec<PathBuf>
     results
 }
 
-pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) -> anyhow::Result<()> {
+pub fn run_init(start_dir: &Path, doc_path: Option<&Path>) -> anyhow::Result<()> {
     let config_path = start_dir.join(".phyllotaxis.yaml");
 
-    // Non-interactive mode: --spec-path was provided, skip all prompts.
-    if let Some(path) = spec_path {
+    // Non-interactive mode: --doc-path was provided, skip all prompts.
+    if let Some(path) = doc_path {
         let resolved = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -183,7 +185,7 @@ pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) -> anyhow::Result<()
         };
 
         if !resolved.exists() {
-            anyhow::bail!("spec file not found: {}", resolved.display());
+            anyhow::bail!("document not found: {}", resolved.display());
         }
 
         // Store the path as given (relative stays relative, absolute stays absolute).
@@ -196,7 +198,7 @@ pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) -> anyhow::Result<()
 
     // Interactive mode — errors here are printed directly since we're in a prompt flow.
     if config_path.exists() {
-        run_add_spec(start_dir, &config_path);
+        run_add_document(start_dir, &config_path);
         return Ok(());
     }
 
@@ -209,15 +211,15 @@ pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) -> anyhow::Result<()
     let candidates = find_spec_candidates(start_dir, framework);
 
     if candidates.is_empty() {
-        eprintln!("No OpenAPI spec files found automatically.");
-        eprint!("Enter the path to your OpenAPI spec file: ");
+        eprintln!("No OpenAPI documents found automatically.");
+        eprint!("Enter the path to your OpenAPI document: ");
     } else {
-        eprintln!("Found spec candidates:");
+        eprintln!("Found document candidates:");
         for (i, path) in candidates.iter().enumerate() {
             let display = path.strip_prefix(start_dir).unwrap_or(path).display();
             eprintln!("  {}. ./{}", i + 1, display);
         }
-        eprint!("Select a spec file (enter number) or type a path: ");
+        eprint!("Select a document (enter number) or type a path: ");
     }
 
     let mut input = String::new();
@@ -253,10 +255,10 @@ pub fn run_init(start_dir: &Path, spec_path: Option<&Path>) -> anyhow::Result<()
     Ok(())
 }
 
-/// Called when a config already exists. Prompts to add another named spec.
-fn run_add_spec(start_dir: &Path, config_path: &Path) {
+/// Called when a config already exists. Prompts to add another named document.
+fn run_add_document(start_dir: &Path, config_path: &Path) {
     eprintln!("Config already exists at {}.", config_path.display());
-    eprint!("Add another spec? Enter a name for the new spec (or press Enter to cancel): ");
+    eprint!("Add another document? Enter a name (or press Enter to cancel): ");
 
     let mut name_input = String::new();
     if let Err(e) = std::io::stdin().read_line(&mut name_input) {
@@ -274,14 +276,14 @@ fn run_add_spec(start_dir: &Path, config_path: &Path) {
     let candidates = find_spec_candidates(start_dir, framework);
 
     if candidates.is_empty() {
-        eprint!("Enter the path to the spec file: ");
+        eprint!("Enter the path to the document: ");
     } else {
-        eprintln!("Found spec candidates:");
+        eprintln!("Found document candidates:");
         for (i, path) in candidates.iter().enumerate() {
             let display = path.strip_prefix(start_dir).unwrap_or(path).display();
             eprintln!("  {}. ./{}", i + 1, display);
         }
-        eprint!("Select a spec file (enter number) or type a path: ");
+        eprint!("Select a document (enter number) or type a path: ");
     }
 
     let mut path_input = String::new();
@@ -307,9 +309,9 @@ fn run_add_spec(start_dir: &Path, config_path: &Path) {
         .display()
         .to_string();
 
-    match write_add_spec(config_path, name, &relative) {
+    match write_add_document(config_path, name, &relative) {
         Ok(()) => eprintln!(
-            "Added spec '{}' → {}. Use `phyllotaxis --spec {} ...` to target it.",
+            "Added document '{}' → {}. Use `phyllotaxis --doc {} ...` to target it.",
             name, relative, name
         ),
         Err(e) => eprintln!("Error updating config: {}", e),
@@ -340,7 +342,7 @@ mod tests {
         let parsed: PhyllotaxisConfig =
             serde_yaml_ng::from_str(&written).expect("Config file must be valid YAML");
 
-        // No top-level key called "injected_key" — the only key should be "spec"
+        // No top-level key called "injected_key" — the only key should be "document"
         let top_level: serde_yaml_ng::Value = serde_yaml_ng::from_str(&written).unwrap();
         assert!(
             top_level.get("injected_key").is_none(),
@@ -348,12 +350,12 @@ mod tests {
             written
         );
 
-        // The spec value must round-trip correctly — the full payload including newline
+        // The document value must round-trip correctly — the full payload including newline
         // is preserved as the string value, not broken into keys.
         assert_eq!(
-            parsed.spec.as_deref(),
+            parsed.document.as_deref(),
             Some(injected_path),
-            "Spec path not preserved after safe serialization"
+            "Document path not preserved after safe serialization"
         );
     }
 
@@ -366,20 +368,20 @@ mod tests {
 
         let written = fs::read_to_string(&config_path).unwrap();
         let parsed: PhyllotaxisConfig = serde_yaml_ng::from_str(&written).unwrap();
-        assert_eq!(parsed.spec.as_deref(), Some("./openapi.yaml"));
+        assert_eq!(parsed.document.as_deref(), Some("./openapi.yaml"));
     }
 
     #[test]
-    fn test_write_add_spec_injection_in_path_is_escaped() {
+    fn test_write_add_document_injection_in_path_is_escaped() {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join(".phyllotaxis.yaml");
 
-        // Start with a valid single-spec config
+        // Start with a valid single-document config
         write_init_config(&config_path, "./openapi.yaml").unwrap();
 
-        // Now add a spec whose path contains a YAML injection payload
-        let injected_path = "other/spec.yaml\ninjected_key: injected_value";
-        write_add_spec(&config_path, "extra", injected_path).unwrap();
+        // Now add a document whose path contains a YAML injection payload
+        let injected_path = "other/doc.yaml\ninjected_key: injected_value";
+        write_add_document(&config_path, "extra", injected_path).unwrap();
 
         let written = fs::read_to_string(&config_path).unwrap();
 
@@ -388,20 +390,22 @@ mod tests {
             serde_yaml_ng::from_str(&written).expect("Config must be valid YAML");
         assert!(
             top_level.get("injected_key").is_none(),
-            "YAML injection via spec path — injected_key is a top-level key in:\n{}",
+            "YAML injection via doc path — injected_key is a top-level key in:\n{}",
             written
         );
-        // And the specs map must not have injected_key as a key
-        let specs = top_level.get("specs").expect("specs key must exist");
+        // And the documents map must not have injected_key as a key
+        let docs = top_level
+            .get("documents")
+            .expect("documents key must exist");
         assert!(
-            specs.get("injected_key").is_none(),
-            "YAML injection via spec path — injected_key is a specs subkey in:\n{}",
+            docs.get("injected_key").is_none(),
+            "YAML injection via doc path — injected_key is a documents subkey in:\n{}",
             written
         );
     }
 
     #[test]
-    fn test_write_add_spec_injection_in_name_is_escaped() {
+    fn test_write_add_document_injection_in_name_is_escaped() {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join(".phyllotaxis.yaml");
 
@@ -409,7 +413,7 @@ mod tests {
 
         // A name containing YAML-special characters
         let injected_name = "evil\ninjected_key: injected_value";
-        write_add_spec(&config_path, injected_name, "./other.yaml").unwrap();
+        write_add_document(&config_path, injected_name, "./other.yaml").unwrap();
 
         let written = fs::read_to_string(&config_path).unwrap();
 
@@ -418,45 +422,47 @@ mod tests {
             serde_yaml_ng::from_str(&written).expect("Config must be valid YAML");
         assert!(
             top_level.get("injected_key").is_none(),
-            "YAML injection via spec name — injected_key is a top-level key in:\n{}",
+            "YAML injection via doc name — injected_key is a top-level key in:\n{}",
             written
         );
-        let specs = top_level.get("specs").expect("specs key must exist");
+        let docs = top_level
+            .get("documents")
+            .expect("documents key must exist");
         assert!(
-            specs.get("injected_key").is_none(),
-            "YAML injection via spec name — injected_key is a specs subkey in:\n{}",
+            docs.get("injected_key").is_none(),
+            "YAML injection via doc name — injected_key is a documents subkey in:\n{}",
             written
         );
     }
 
     #[test]
-    fn test_write_add_spec_migrates_single_spec_format() {
+    fn test_write_add_document_migrates_single_document_format() {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join(".phyllotaxis.yaml");
 
-        // Start with single-spec format
+        // Start with single-document format
         write_init_config(&config_path, "./openapi.yaml").unwrap();
 
-        // Add a named spec — should migrate and preserve the original
-        write_add_spec(&config_path, "v2", "./openapi-v2.yaml").unwrap();
+        // Add a named document — should migrate and preserve the original
+        write_add_document(&config_path, "v2", "./openapi-v2.yaml").unwrap();
 
         let written = fs::read_to_string(&config_path).unwrap();
         let parsed: PhyllotaxisConfig = serde_yaml_ng::from_str(&written).unwrap();
 
         assert!(
-            parsed.specs.contains_key("default"),
-            "Original spec should be migrated to 'default'"
+            parsed.documents.contains_key("default"),
+            "Original document should be migrated to 'default'"
         );
         assert_eq!(
-            parsed.specs.get("default").map(String::as_str),
+            parsed.documents.get("default").map(String::as_str),
             Some("./openapi.yaml")
         );
         assert!(
-            parsed.specs.contains_key("v2"),
-            "New spec 'v2' should be present"
+            parsed.documents.contains_key("v2"),
+            "New document 'v2' should be present"
         );
         assert_eq!(
-            parsed.specs.get("v2").map(String::as_str),
+            parsed.documents.get("v2").map(String::as_str),
             Some("./openapi-v2.yaml")
         );
     }

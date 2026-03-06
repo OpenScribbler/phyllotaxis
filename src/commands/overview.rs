@@ -1,4 +1,4 @@
-use crate::spec::LoadedSpec;
+use crate::spec::LoadedDocument;
 
 #[derive(Debug, serde::Serialize)]
 pub struct OverviewData {
@@ -23,7 +23,7 @@ pub struct ServerVar {
     pub default: Option<String>,
 }
 
-pub fn build(loaded: &LoadedSpec) -> OverviewData {
+pub fn build(loaded: &LoadedDocument) -> OverviewData {
     let title = loaded.api.info.title.clone();
     let description = loaded.api.info.description.as_ref().map(|d| {
         if d.chars().count() > 200 {
@@ -111,10 +111,10 @@ mod tests {
     use super::*;
     use crate::spec;
 
-    fn load_kitchen_sink() -> crate::spec::LoadedSpec {
+    fn load_kitchen_sink() -> crate::spec::LoadedDocument {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let path = manifest_dir.join("tests/fixtures/kitchen-sink.yaml");
-        spec::load_spec(Some(path.to_str().unwrap()), manifest_dir).unwrap()
+        spec::load_document(Some(path.to_str().unwrap()), manifest_dir).unwrap()
     }
 
     #[test]

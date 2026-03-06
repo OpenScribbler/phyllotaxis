@@ -12,11 +12,11 @@ fn run(args: &[&str]) -> (String, String, i32) {
     )
 }
 
-/// Helper to run with the petstore fixture as --spec
+/// Helper to run with the petstore fixture as --doc
 fn run_with_petstore(args: &[&str]) -> (String, String, i32) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
-    let mut full_args = vec!["--spec", &spec];
+    let mut full_args = vec!["--doc", &spec];
     full_args.extend_from_slice(args);
     run(&full_args)
 }
@@ -270,7 +270,7 @@ fn test_ansi_injection_sanitized_from_description() {
     let spec_path = tmp.path().to_str().unwrap().to_owned();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
-        .args(["--spec", &spec_path])
+        .args(["--doc", &spec_path])
         .output()
         .expect("failed to run phyllotaxis");
 
@@ -286,7 +286,7 @@ fn test_ansi_injection_sanitized_from_description() {
 // ─── Task 14.5: Global flags and error cases ───
 
 #[test]
-fn test_spec_not_found() {
+fn test_document_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
         .current_dir(dir.path())
@@ -295,20 +295,18 @@ fn test_spec_not_found() {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let code = output.status.code().unwrap_or(-1);
 
-    assert_eq!(code, 1, "Expected exit code 1 when no spec found");
+    assert_eq!(code, 1, "Expected exit code 1 when no document found");
     assert!(
-        stderr.to_lowercase().contains("not found")
-            || stderr.to_lowercase().contains("no spec")
-            || stderr.to_lowercase().contains("no openapi"),
-        "Expected error about missing spec. Got: {}",
+        stderr.to_lowercase().contains("not found") || stderr.to_lowercase().contains("no openapi"),
+        "Expected error about missing document. Got: {}",
         stderr
     );
 }
 
 #[test]
-fn test_invalid_spec() {
-    let (_stdout, stderr, code) = run(&["--spec", "/dev/null"]);
-    assert_eq!(code, 1, "Expected exit code 1 for invalid spec");
+fn test_invalid_document() {
+    let (_stdout, stderr, code) = run(&["--doc", "/dev/null"]);
+    assert_eq!(code, 1, "Expected exit code 1 for invalid document");
     assert!(
         stderr.to_lowercase().contains("parse")
             || stderr.to_lowercase().contains("failed")
@@ -324,14 +322,14 @@ fn test_json_flag_all_commands() {
     let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
 
     let commands: Vec<Vec<&str>> = vec![
-        vec!["--spec", &spec, "--json"],
-        vec!["--spec", &spec, "--json", "--resources"],
-        vec!["--spec", &spec, "--json", "--resources", "pets"],
-        vec!["--spec", &spec, "--json", "--endpoint", "GET", "/pets"],
-        vec!["--spec", &spec, "--json", "--schemas"],
-        vec!["--spec", &spec, "--json", "--schemas", "Pet"],
-        vec!["--spec", &spec, "--json", "--auth"],
-        vec!["--spec", &spec, "--json", "search", "pet"],
+        vec!["--doc", &spec, "--json"],
+        vec!["--doc", &spec, "--json", "--resources"],
+        vec!["--doc", &spec, "--json", "--resources", "pets"],
+        vec!["--doc", &spec, "--json", "--endpoint", "GET", "/pets"],
+        vec!["--doc", &spec, "--json", "--schemas"],
+        vec!["--doc", &spec, "--json", "--schemas", "Pet"],
+        vec!["--doc", &spec, "--json", "--auth"],
+        vec!["--doc", &spec, "--json", "search", "pet"],
     ];
 
     for cmd_args in &commands {
@@ -420,7 +418,7 @@ fn run_with_petstore_env(args: &[&str], env: &[(&str, &str)]) -> (String, String
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
-        .args(["--spec", &spec])
+        .args(["--doc", &spec])
         .args(args)
         .envs(env.iter().copied())
         .output()
@@ -519,7 +517,7 @@ fn test_init_non_interactive_creates_config() {
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
         .current_dir(dir.path())
-        .args(["init", "--spec-path", &spec])
+        .args(["init", "--doc-path", &spec])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("failed to run phyllotaxis");
@@ -542,27 +540,24 @@ fn test_init_non_interactive_creates_config() {
     let written = std::fs::read_to_string(&config_path).unwrap();
     assert!(
         written.contains("petstore.yaml"),
-        ".phyllotaxis.yaml must contain the spec path. Got:\n{}",
+        ".phyllotaxis.yaml must contain the document path. Got:\n{}",
         written
     );
 }
 
 #[test]
-fn test_init_non_interactive_missing_spec_exits_1() {
+fn test_init_non_interactive_missing_doc_exits_1() {
     let dir = tempfile::tempdir().unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
         .current_dir(dir.path())
-        .args(["init", "--spec-path", "nonexistent/path.yaml"])
+        .args(["init", "--doc-path", "nonexistent/path.yaml"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("failed to run phyllotaxis");
 
     let code = output.status.code().unwrap_or(-1);
-    assert_eq!(
-        code, 1,
-        "Expected exit code 1 when spec-path does not exist"
-    );
+    assert_eq!(code, 1, "Expected exit code 1 when doc-path does not exist");
 }
 
 // ─── Task 3.7: Accessible arrow labels ───
@@ -652,11 +647,11 @@ fn test_completions_fish() {
 
 // ─── Task 23: Kitchen-sink coverage gap integration tests ───
 
-/// Helper to run with the kitchen-sink fixture as --spec
+/// Helper to run with the kitchen-sink fixture as --doc
 fn run_with_kitchen_sink(args: &[&str]) -> (String, String, i32) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
-    let mut full_args = vec!["--spec", &spec];
+    let mut full_args = vec!["--doc", &spec];
     full_args.extend_from_slice(args);
     run(&full_args)
 }
@@ -951,7 +946,7 @@ fn test_overview_shows_callback_count() {
 fn test_overview_shows_top_resources() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
-    let (stdout, _stderr, code) = run(&["--spec", &spec]);
+    let (stdout, _stderr, code) = run(&["--doc", &spec]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Top Resources"),
@@ -964,7 +959,7 @@ fn test_overview_shows_top_resources() {
 fn test_overview_json_includes_top_resources() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
-    let (stdout, _stderr, code) = run(&["--spec", &spec, "--json"]);
+    let (stdout, _stderr, code) = run(&["--doc", &spec, "--json"]);
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert!(
@@ -1131,18 +1126,100 @@ fn test_multi_flag_resources_and_auth() {
 
 #[test]
 fn test_multi_flag_json_composition() {
-    // JSON mode with multiple flags — each handler prints its own JSON object
+    // JSON mode with multiple flags produces a single valid JSON document with top-level keys
     let (stdout, _stderr, code) = run_with_petstore(&["--json", "--resources", "--auth"]);
     assert_eq!(code, 0);
-    // Both JSON objects should be present in stdout
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Multi-flag JSON should be a single valid document");
     assert!(
-        stdout.contains("\"resources\"") || stdout.contains("\"resource_groups\""),
-        "JSON output should contain resources data"
+        doc.get("resources").is_some(),
+        "Should have 'resources' top-level key"
     );
     assert!(
-        stdout.contains("\"security_schemes\"") || stdout.contains("\"schemes\""),
-        "JSON output should contain auth data"
+        doc.get("auth").is_some(),
+        "Should have 'auth' top-level key"
     );
+    // Resources should contain the actual resource data
+    assert!(
+        doc["resources"]["resources"].is_array(),
+        "resources.resources should be an array"
+    );
+    // Auth should contain schemes
+    assert!(
+        doc["auth"]["schemes"].is_array(),
+        "auth.schemes should be an array"
+    );
+}
+
+#[test]
+fn test_single_flag_json_unchanged() {
+    // Single-flag JSON preserves original shape (no wrapper key)
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "--resources"]);
+    assert_eq!(code, 0);
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Single-flag JSON should be valid");
+    // Should have direct keys (resources, drill_deeper), NOT wrapped under "resources"
+    assert!(
+        doc.get("resources").is_some(),
+        "Should have 'resources' key directly (not wrapped)"
+    );
+    assert!(
+        doc.get("drill_deeper").is_some(),
+        "Should have 'drill_deeper' key directly"
+    );
+}
+
+#[test]
+fn test_multi_flag_text_unchanged() {
+    // Text mode with multiple flags still concatenates output
+    let (stdout, _stderr, code) = run_with_petstore(&["--resources", "--auth"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Resources:"),
+        "Text output should contain Resources section"
+    );
+    assert!(
+        stdout.contains("Authentication:"),
+        "Text output should contain Authentication section"
+    );
+}
+
+#[test]
+fn test_context_implies_expand() {
+    // --context should expand inline objects in request bodies without explicit --expand
+    let (stdout, _stderr, code) = run_with_petstore(&["--endpoint", "POST", "/pets", "--context"]);
+    assert_eq!(code, 0);
+    // Owner should be expanded to show nested fields
+    assert!(
+        stdout.contains("Owner:"),
+        "--context should expand Owner ref. Got:\n{}",
+        &stdout[..500.min(stdout.len())]
+    );
+    // Existing --expand behavior should be unchanged
+    let (expand_stdout, _, expand_code) =
+        run_with_petstore(&["--endpoint", "POST", "/pets", "--expand"]);
+    assert_eq!(expand_code, 0);
+    assert!(
+        expand_stdout.contains("Owner:"),
+        "--expand should still work independently"
+    );
+}
+
+#[test]
+fn test_no_empty_resource_groups() {
+    // Resource groups with 0 endpoints should be hidden
+    let (stdout, _stderr, code) = run_with_petstore(&["--json", "--resources"]);
+    assert_eq!(code, 0);
+    let doc: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    for group in doc["resources"].as_array().unwrap() {
+        assert!(
+            group["endpoint_count"].as_u64().unwrap() > 0,
+            "Resource group '{}' has 0 endpoints and should be hidden",
+            group["slug"]
+        );
+    }
 }
 
 #[test]
@@ -1160,18 +1237,18 @@ fn test_positional_document_arg() {
 }
 
 #[test]
-fn test_positional_document_overrides_spec_flag() {
-    // Positional document takes priority over --spec
+fn test_positional_document_overrides_doc_flag() {
+    // Positional document takes priority over --doc
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let petstore = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
     let kitchen_sink = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
-    // Pass kitchen-sink as positional, petstore as --spec — should use kitchen-sink
-    let (stdout, _stderr, code) = run(&[&kitchen_sink, "--spec", &petstore, "--resources"]);
+    // Pass kitchen-sink as positional, petstore as --doc — should use kitchen-sink
+    let (stdout, _stderr, code) = run(&[&kitchen_sink, "--doc", &petstore, "--resources"]);
     assert_eq!(code, 0);
     // kitchen-sink has /users, petstore does not
     assert!(
         stdout.contains("users"),
-        "Positional doc should override --spec. Expected kitchen-sink resources. Got:\n{}",
+        "Positional doc should override --doc. Expected kitchen-sink resources. Got:\n{}",
         &stdout[..400.min(stdout.len())]
     );
 }
@@ -1318,11 +1395,11 @@ fn test_used_by_flag() {
 
 // ─── External $ref dereferencing ──────────────────────────────────────────
 
-/// Helper to run with the multi-file fixture as --spec
+/// Helper to run with the multi-file fixture as --doc
 fn run_with_multi_file(args: &[&str]) -> (String, String, i32) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/multi-file/openapi.yaml", manifest_dir);
-    let mut full_args = vec!["--spec", &spec];
+    let mut full_args = vec!["--doc", &spec];
     full_args.extend_from_slice(args);
     run(&full_args)
 }
@@ -1396,7 +1473,7 @@ components:
     let spec_path = tmp.path().join("openapi.yaml");
     std::fs::write(&spec_path, spec_content).unwrap();
 
-    let (_stdout, stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "--schemas"]);
+    let (_stdout, stderr, code) = run(&["--doc", spec_path.to_str().unwrap(), "--schemas"]);
 
     assert_ne!(code, 0, "Expected non-zero exit for missing ref file");
     assert!(
@@ -1429,7 +1506,7 @@ components:
     let spec_path = tmp.path().join("openapi.yaml");
     std::fs::write(&spec_path, spec_content).unwrap();
 
-    let (_stdout, stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "--schemas"]);
+    let (_stdout, stderr, code) = run(&["--doc", spec_path.to_str().unwrap(), "--schemas"]);
 
     assert_ne!(
         code, 0,
@@ -1472,7 +1549,7 @@ components:
     let spec_path = tmp.path().join("openapi.yaml");
     std::fs::write(&spec_path, spec_content).unwrap();
 
-    let (stdout, _stderr, code) = run(&["--spec", spec_path.to_str().unwrap(), "--schemas"]);
+    let (stdout, _stderr, code) = run(&["--doc", spec_path.to_str().unwrap(), "--schemas"]);
 
     assert_eq!(
         code, 0,

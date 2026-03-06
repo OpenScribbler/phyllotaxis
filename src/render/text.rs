@@ -121,7 +121,9 @@ pub fn render_overview(data: &OverviewData, bin_name: &str, _is_tty: bool) -> St
     writeln!(out, "API: {}", sanitize(&data.title)).unwrap();
 
     if let Some(ref desc) = data.description {
-        writeln!(out, "{}", sanitize(desc)).unwrap();
+        if !desc.trim().is_empty() {
+            writeln!(out, "{}", sanitize(desc)).unwrap();
+        }
     }
 
     if data.base_urls.len() == 1 {
@@ -238,7 +240,9 @@ pub fn render_endpoint_detail(
     .unwrap();
 
     if let Some(ref desc) = endpoint.description {
-        writeln!(out, "{}", sanitize(desc)).unwrap();
+        if !desc.trim().is_empty() {
+            writeln!(out, "{}", sanitize(desc)).unwrap();
+        }
     }
 
     // Auth
@@ -750,13 +754,9 @@ pub fn render_schema_detail(
         render_schema_fields(&mut out, &model.fields, 2);
     }
 
-    // Related schemas (only when NOT expanded)
-    if !expanded {
-        let nested: Vec<&str> = model
-            .fields
-            .iter()
-            .filter_map(|f| f.nested_schema_name.as_deref())
-            .collect::<std::collections::HashSet<_>>()
+    // Related schemas — show for any refs that weren't inlined
+    {
+        let nested: Vec<&str> = collect_unexpanded_refs(&model.fields)
             .into_iter()
             .collect::<Vec<_>>();
 
@@ -790,6 +790,26 @@ pub fn render_schema_detail(
     }
 
     out
+}
+
+/// Collect unique nested schema names from fields that were NOT expanded
+/// (i.e., have nested_schema_name set but no nested_fields populated).
+/// Recurses into nested_fields to find unexpanded refs at deeper levels.
+fn collect_unexpanded_refs(
+    fields: &[crate::models::resource::Field],
+) -> std::collections::HashSet<&str> {
+    let mut names = std::collections::HashSet::new();
+    for f in fields {
+        if let Some(ref name) = f.nested_schema_name {
+            if f.nested_fields.is_empty() {
+                // Has a ref but wasn't expanded — show in Related schemas
+                names.insert(name.as_str());
+            }
+        }
+        // Recurse into expanded fields to find unexpanded refs at deeper levels
+        names.extend(collect_unexpanded_refs(&f.nested_fields));
+    }
+    names
 }
 
 fn render_schema_fields(

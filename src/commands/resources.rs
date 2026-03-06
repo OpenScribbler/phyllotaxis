@@ -101,6 +101,9 @@ pub fn extract_resource_groups(api: &openapiv3::OpenAPI) -> Vec<ResourceGroup> {
         return extract_path_prefix_groups(api);
     }
 
+    // Remove groups with no endpoints (e.g., tags defined globally but never used)
+    result.retain(|g| !g.endpoints.is_empty());
+
     result
 }
 
@@ -2019,7 +2022,7 @@ mod tests {
 
     #[test]
     fn test_resolve_path_item_found() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2030,7 +2033,7 @@ mod tests {
 
     #[test]
     fn test_resolve_path_item_missing() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2041,7 +2044,7 @@ mod tests {
 
     #[test]
     fn test_resolve_operation_known_method() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2056,7 +2059,7 @@ mod tests {
 
     #[test]
     fn test_resolve_operation_unknown_method() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2067,7 +2070,7 @@ mod tests {
 
     #[test]
     fn test_extract_security_returns_vec() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2080,7 +2083,7 @@ mod tests {
 
     #[test]
     fn test_resolve_operation_absent_method() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2092,7 +2095,7 @@ mod tests {
 
     #[test]
     fn test_extract_responses_nonempty() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2108,7 +2111,7 @@ mod tests {
 
     #[test]
     fn test_extract_responses_status_codes_are_strings() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2123,7 +2126,7 @@ mod tests {
 
     #[test]
     fn test_merge_parameters_nonempty_for_parameterized_path() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2140,7 +2143,7 @@ mod tests {
 
     #[test]
     fn test_merge_parameters_runs_for_simple_path() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2153,7 +2156,7 @@ mod tests {
 
     #[test]
     fn test_extract_request_body_post_has_body() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
@@ -2167,7 +2170,7 @@ mod tests {
 
     #[test]
     fn test_extract_request_body_get_is_none() {
-        let api = crate::spec::load_spec(
+        let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
         )
