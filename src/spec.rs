@@ -177,7 +177,8 @@ pub fn resolve_doc_path(
          1. --doc flag (not provided)\n\
          2. .phyllotaxis.yaml config ({})\n\
          3. Auto-detect in {} (no openapi files found)\n\n\
-         Run 'phyllotaxis init' to set up, or use --doc <path>.",
+         Run 'phyll init' to configure a document, or pass one directly:\n\
+         \x20 phyll --doc ./path/to/openapi.yaml",
         if config.is_some() {
             "found, no document configured"
         } else {
