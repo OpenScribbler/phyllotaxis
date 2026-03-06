@@ -119,6 +119,10 @@ Works great for humans too — same progressive disclosure, just without the tok
 
 ## How the Layers Work
 
+Phyllotaxis auto-detects OpenAPI documents in your project, or you can run `phyll init` to configure one. For one-off exploration, pass the file directly with `--doc`. See [Document Discovery](#document-discovery) for the full resolution order.
+
+The first example uses `--doc` to show one-off usage. The rest assume a document is already configured.
+
 ### Level 0: Overview
 
 ```bash
