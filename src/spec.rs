@@ -650,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_named_spec_by_name() {
+    fn test_resolve_named_document_by_name() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("public.yaml");
         fs::write(
@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_uses_default_from_specs() {
+    fn test_resolve_uses_default_from_documents() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("public.yaml");
         fs::write(
@@ -690,14 +690,14 @@ mod tests {
         .unwrap();
 
         let config = load_config(tmp.path());
-        // No --spec flag: should use default
+        // No --doc flag: should use default
         let result = resolve_doc_path(None, &config, tmp.path());
         assert!(result.is_ok(), "Should use default document: {:?}", result);
         assert_eq!(result.unwrap(), spec_path);
     }
 
     #[test]
-    fn test_resolve_errors_on_multi_spec_no_default() {
+    fn test_resolve_errors_on_multi_document_no_default() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_a = tmp.path().join("a.yaml");
         let spec_b = tmp.path().join("b.yaml");
@@ -730,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn test_backward_compat_single_spec_field() {
+    fn test_backward_compat_single_document_field() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("api.yaml");
         fs::write(
@@ -847,7 +847,7 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("PHYLLOTAXIS_DOCUMENT"),
-            "Error should mention PHYLLOTAXIS_SPEC"
+            "Error should mention PHYLLOTAXIS_DOCUMENT"
         );
     }
 

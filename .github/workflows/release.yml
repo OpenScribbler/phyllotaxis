@@ -188,7 +188,7 @@ jobs:
 
           cat > Formula/phyllotaxis.rb << FORMULA
           class Phyllotaxis < Formula
-            desc "Progressive disclosure CLI for OpenAPI specs"
+            desc "Progressive disclosure CLI for OpenAPI documents"
             homepage "https://github.com/OpenScribbler/phyllotaxis"
             version "${VERSION}"
             license "Apache-2.0"

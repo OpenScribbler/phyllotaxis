@@ -1224,11 +1224,14 @@ fn test_no_empty_resource_groups() {
 
 #[test]
 fn test_positional_document_arg() {
-    // phyll <document> --resources should use document as spec path
+    // phyll <document> --resources should use document as the path
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
     let (stdout, _stderr, code) = run(&[&spec, "--resources"]);
-    assert_eq!(code, 0, "Positional document arg should work as spec path");
+    assert_eq!(
+        code, 0,
+        "Positional document arg should work as document path"
+    );
     assert!(
         stdout.contains("pets"),
         "Should list resources from positional doc arg. Got:\n{}",
@@ -1255,12 +1258,12 @@ fn test_positional_document_overrides_doc_flag() {
 
 #[test]
 fn test_migration_guard_resources() {
-    let (_stdout, stderr, code) = run_with_petstore(&[]);
+    let (_stdout, _stderr, code) = run_with_petstore(&[]);
     // First confirm petstore loads fine
     assert_eq!(code, 0);
 
     // Now test the migration guard: "resources" as positional should be caught
-    // Use a tmpdir with no spec so the only arg is the old subcommand name
+    // Use a tmpdir with no document so the only arg is the old subcommand name
     let dir = tempfile::tempdir().unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
         .current_dir(dir.path())

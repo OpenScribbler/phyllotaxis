@@ -105,7 +105,7 @@ pub fn detect_framework(dir: &Path) -> Option<&'static str> {
     None
 }
 
-pub fn find_spec_candidates(dir: &Path, framework: Option<&str>) -> Vec<PathBuf> {
+pub fn find_document_candidates(dir: &Path, framework: Option<&str>) -> Vec<PathBuf> {
     let mut search_dirs = Vec::new();
 
     // Framework-specific dirs first
@@ -208,7 +208,7 @@ pub fn run_init(start_dir: &Path, doc_path: Option<&Path>) -> anyhow::Result<()>
         None => eprintln!("No doc framework detected."),
     }
 
-    let candidates = find_spec_candidates(start_dir, framework);
+    let candidates = find_document_candidates(start_dir, framework);
 
     if candidates.is_empty() {
         eprintln!("No OpenAPI documents found automatically.");
@@ -273,7 +273,7 @@ fn run_add_document(start_dir: &Path, config_path: &Path) {
     }
 
     let framework = detect_framework(start_dir);
-    let candidates = find_spec_candidates(start_dir, framework);
+    let candidates = find_document_candidates(start_dir, framework);
 
     if candidates.is_empty() {
         eprint!("Enter the path to the document: ");

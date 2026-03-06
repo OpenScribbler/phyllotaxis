@@ -8,7 +8,7 @@
 
 </div>
 
-A CLI that lets you explore OpenAPI specs one layer at a time instead of reading the whole thing. Start with an overview, pick a resource, drill into an endpoint, check a schema. You (or an LLM) only see what you actually need.
+An LLM-friendly CLI for exploring OpenAPI documents one layer at a time. Instead of stuffing an entire spec into a prompt, give the model exactly the slice it needs — one resource group, one endpoint, one schema.
 
 <div align="center">
 
@@ -16,7 +16,7 @@ A CLI that lets you explore OpenAPI specs one layer at a time instead of reading
 
 </div>
 
-Outputs plain text or JSON. Also available as `phyll` (shorter alias, same binary).
+Works great for humans too. Outputs plain text or JSON. Also available as `phyll` (shorter alias, same binary).
 
 ## Install
 
@@ -73,26 +73,31 @@ phyll --help
 
 ## Why?
 
-OpenAPI specs get big fast. A mid-size API can have hundreds of endpoints, thousands of schema fields, and nested `$ref`s everywhere. Phyllotaxis gives you layers: start high, go deep only where you care.
+OpenAPI documents get big fast. Dumping one into a prompt creates problems beyond token cost:
 
-This is especially useful for LLM workflows. Instead of stuffing an entire OpenAPI document into a prompt and burning tokens, you can give the model just the slice it needs: "show me the Pet schema" or "what does POST /pets expect?"
+- **Precision** — models hallucinate when they have to pick relevant fields out of thousands. Focused context means fewer mistakes.
+- **Agent-friendly** — an LLM agent can call phyll iteratively: overview → resource → endpoint → schema. Each step is a tool call with a focused response.
+- **Deterministic** — same query, same output. No prompt engineering to extract the right slice.
+- **Small models work** — Haiku, local models, and cost-constrained setups can't fit a full spec. Phyll makes them viable.
+
+Works great for humans too — same progressive disclosure, just without the token math.
 
 ## Commands
 
 | Command | What it shows |
 |---------|-------------|
 | `phyll` | API overview: title, description, base URLs, auth, top resources |
-| `phyll resources` | All resource groups with endpoint counts |
-| `phyll resources <name>` | Endpoints in a resource group |
-| `phyll resources <name> <METHOD> <path>` | Full endpoint detail: params, request body, responses |
-| `phyll schemas` | All schemas |
-| `phyll schemas <name>` | Schema detail: fields, types, composition |
-| `phyll schemas <name> --used-by` | Which endpoints use this schema |
-| `phyll schemas <name> --example` | Generate an example JSON object |
-| `phyll auth` | Auth schemes and how they're used |
+| `phyll --resources` | All resource groups with endpoint counts |
+| `phyll --resources <name>` | Endpoints in a resource group |
+| `phyll --endpoint <METHOD> <path>` | Full endpoint detail: params, request body, responses |
+| `phyll --schemas` | All schemas |
+| `phyll --schemas <name>` | Schema detail: fields, types, composition |
+| `phyll --schemas <name> --used-by` | Which endpoints use this schema |
+| `phyll --schemas <name> --example` | Generate an example JSON object |
+| `phyll --auth` | Auth schemes and how they're used |
 | `phyll search <term>` | Search across everything |
-| `phyll callbacks` | Webhook callbacks |
-| `phyll callbacks <name>` | Callback detail |
+| `phyll --callbacks` | Webhook callbacks |
+| `phyll --callbacks <name>` | Callback detail |
 | `phyll init` | Auto-detect OpenAPI documents and write config |
 | `phyll completions <shell>` | Shell completions (bash, zsh, fish, powershell, elvish) |
 
@@ -127,29 +132,26 @@ Top Resources:
   deprecated-pets          (2 endpoints)
 
 Commands:
-  phyll resources    List all resource groups (3 available)
-  phyll schemas      List all data models (4 available)
-  phyll auth         Authentication details
-  phyll search       Search across all endpoints and schemas
+  phyll --resources   List all resource groups (3 available)
+  phyll --schemas     List all data models (4 available)
+  phyll --auth        Authentication details
+  phyll search        Search across all endpoints and schemas
 ```
 
 ### Level 1: Resource Listing
 
 ```bash
-$ phyll resources
+$ phyll --resources
 Resources:
   pets              Pet management
   deprecated-pets   [DEPRECATED]  Old pet endpoints
   experimental      [ALPHA]       Alpha feature endpoints
-
-Drill deeper:
-  phyll resources <name>
 ```
 
 ### Level 2: Resource Detail
 
 ```bash
-$ phyll resources pets
+$ phyll --resources pets
 Resource: Pets
 
 Endpoints:
@@ -157,15 +159,12 @@ Endpoints:
   POST    /pets         Create a pet
   GET     /pets/{id}    Get a pet by ID
   DELETE  /pets/{id}    Delete a pet
-
-Drill deeper:
-  phyll resources pets GET /pets
 ```
 
 ### Level 3: Endpoint Detail
 
 ```bash
-$ phyll resources pets POST /pets
+$ phyll --endpoint POST /pets
 POST /pets
 
 Authentication: bearerAuth (required)
@@ -184,13 +183,13 @@ Errors:
   409 Duplicate pet
 
 Drill deeper:
-  phyll schemas Pet
+  phyll --schemas Pet
 ```
 
 ### Schema Detail
 
 ```bash
-$ phyll schemas Pet
+$ phyll --schemas Pet
 Schema: Pet
 
 Fields:
@@ -201,22 +200,19 @@ Fields:
   owner     Owner        (optional)
 
 Related schemas:
-  phyll schemas Owner
+  phyll --schemas Owner
 ```
 
 ### Callbacks
 
 ```bash
-$ phyll callbacks
+$ phyll --callbacks
 Callbacks:
   onPetAdded    Defined on: POST /pets
-
-Drill deeper:
-  phyll callbacks <name>
 ```
 
 ```bash
-$ phyll callbacks onPetAdded
+$ phyll --callbacks onPetAdded
 Callback: onPetAdded
 Defined on: POST /pets
 
@@ -234,7 +230,7 @@ Operations:
 Generate example JSON from any schema:
 
 ```bash
-$ phyll schemas Pet --example
+$ phyll --schemas Pet --example
 Example (Pet, required fields, auto-generated):
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -264,7 +260,7 @@ If the document has `example` values on schemas or properties, those get used in
 Find out which endpoints use a given schema:
 
 ```bash
-$ phyll schemas TagDTO --used-by
+$ phyll --schemas TagDTO --used-by
 Schema: TagDTO
 
 Used by 114 endpoint(s):
@@ -286,7 +282,7 @@ This catches direct `$ref` references, allOf/oneOf/anyOf compositions, and schem
 When you're looking at an endpoint, `--context` expands the schemas referenced in the request/response body:
 
 ```bash
-$ phyll resources access-policy-v2 POST /api/v2/access-policies --context
+$ phyll --endpoint POST /api/v2/access-policies --context
 POST /api/v2/access-policies
 ...
 
@@ -307,7 +303,7 @@ For oneOf/anyOf endpoints, `--context` shows the variant schemas too.
 ## Schema Expansion
 
 ```bash
-$ phyll schemas Pet --expand
+$ phyll --schemas Pet --expand
 Schema: Pet (expanded)
 
 Fields:
@@ -339,7 +335,7 @@ If a match comes from somewhere non-obvious (like a parameter name or descriptio
 Every command supports `--json`. It's pretty-printed in a terminal and compact when piped:
 
 ```bash
-$ phyll --json schemas Pet | jq '.fields[].name'
+$ phyll --json --schemas Pet | jq '.fields[].name'
 "id"
 "name"
 "status"
@@ -352,25 +348,13 @@ $ phyll --json schemas Pet | jq '.fields[].name'
 Mistype a name and phyllotaxis suggests close matches:
 
 ```bash
-$ phyll resources pet
+$ phyll --resources pet
 Error: Resource 'pet' not found.
 Did you mean:
-  phyll resources pets
+  phyll --resources pets
 ```
 
-## Helpful Error Messages
-
-If you accidentally pass the method and path as a single quoted argument, phyllotaxis catches it:
-
-```bash
-$ phyll resources pets "GET /pets"
-Error: Method and path must be separate arguments.
-
-  You passed:  "GET /pets"
-  Try instead: phyll resources pets GET /pets
-```
-
-## Spec Discovery
+## Document Discovery
 
 Phyllotaxis finds your OpenAPI document in four ways (checked in this order):
 
@@ -396,12 +380,12 @@ For non-interactive setup (CI, scripts), pass the path directly:
 $ phyll init --doc-path ./api/openapi.yaml
 ```
 
-### Multi-Spec Projects
+### Multi-Document Projects
 
-If your project has multiple API specs, use named specs in `.phyllotaxis.yaml`:
+If your project has multiple API documents, use named documents in `.phyllotaxis.yaml`:
 
 ```yaml
-specs:
+documents:
   public: ./api/public.yaml
   internal: ./api/internal.yaml
 default: public
@@ -413,7 +397,7 @@ variables:
 Then pick one by name:
 
 ```bash
-$ phyll --doc internal resources
+$ phyll --doc internal --resources
 ```
 
 The `variables` map fills in server URL template variables (e.g., `{tenant}` becomes `my-org` in base URL output).
@@ -423,8 +407,8 @@ The `variables` map fills in server URL template variables (e.g., `{tenant}` bec
 - **OpenAPI 3.0.x** - fully supported
 - **OpenAPI 3.1** - not supported (the `openapiv3` parser targets 3.0)
 - **Swagger / OpenAPI 2.0** - not supported
-- **YAML and JSON specs** - both work
-- **`$ref` resolution** - local references only, no external file refs
+- **YAML and JSON documents** - both work
+- **`$ref` resolution** - local and external file references (multi-file documents)
 
 ## Project Structure
 
@@ -451,20 +435,22 @@ phyllotaxis/
 │       └── json.rs          # JSON output
 └── tests/
     ├── fixtures/
-    │   ├── petstore.yaml    # Test fixture
-    │   └── kitchen-sink.yaml # Edge case fixture
-    ├── fixture_sanity.rs    # Fixture parse validation
-    ├── integration_tests.rs # End-to-end CLI tests
-    └── lib_tests.rs         # Library API tests
+    │   ├── petstore.yaml     # Test fixture
+    │   ├── kitchen-sink.yaml # Edge case fixture
+    │   └── multi-file/       # External $ref test fixture
+    ├── fixture_sanity.rs     # Fixture parse validation
+    ├── integration_tests.rs  # End-to-end CLI tests
+    └── lib_tests.rs          # Library API tests
 ```
 
 ## Roadmap
 
 | Feature | Status |
 |---------|--------|
+| External `$ref` resolution (multi-file documents) | Done |
+| Remote URL loading (fetch specs from HTTP/HTTPS) | Planned |
 | OpenAPI 3.1 support | Planned |
 | Swagger / OpenAPI 2.0 support | Planned |
-| External `$ref` resolution (multi-file specs) | Planned |
 | MCP server (LLM tool integration) | Planned |
 
 See [issues](https://github.com/OpenScribbler/phyllotaxis/issues) for what's being worked on now.
