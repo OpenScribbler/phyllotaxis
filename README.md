@@ -452,6 +452,7 @@ phyllotaxis/
 | Feature | Status |
 |---------|--------|
 | External `$ref` resolution (multi-file documents) | Done |
+| Document management UX (persistent `--doc`, nicknames) | Planned |
 | Remote URL loading (fetch specs from HTTP/HTTPS) | Planned |
 | OpenAPI 3.1 support | Planned |
 | Swagger / OpenAPI 2.0 support | Planned |
