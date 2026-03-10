@@ -17,6 +17,7 @@ specs/
 
 # Local config
 .phyllotaxis.yaml
+.phyllotaxis/
 
 # Release guard sentinel (do not commit)
 .release-pending.yml
