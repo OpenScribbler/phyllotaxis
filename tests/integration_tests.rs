@@ -531,16 +531,16 @@ fn test_init_non_interactive_creates_config() {
         stderr
     );
 
-    let config_path = dir.path().join(".phyllotaxis.yaml");
+    let config_path = dir.path().join(".phyllotaxis").join("config.yaml");
     assert!(
         config_path.exists(),
-        ".phyllotaxis.yaml must be written in the working directory"
+        ".phyllotaxis/config.yaml must be written in the working directory"
     );
 
     let written = std::fs::read_to_string(&config_path).unwrap();
     assert!(
         written.contains("petstore.yaml"),
-        ".phyllotaxis.yaml must contain the document path. Got:\n{}",
+        ".phyllotaxis/config.yaml must contain the document path. Got:\n{}",
         written
     );
 }

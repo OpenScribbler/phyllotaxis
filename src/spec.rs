@@ -3,25 +3,39 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-#[derive(Debug, serde::Deserialize, Default)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct Config {
-    /// Single document path (backward compat). Ignored if `documents` is present.
-    pub document: Option<String>,
-    /// Named documents map: name → relative path
+    /// Active document nickname (used when no --doc flag is given)
+    pub active: Option<String>,
+    /// Named documents map: nickname → relative path
     #[serde(default)]
     pub documents: HashMap<String, String>,
-    /// Default document name to use when `documents` is present and no --doc flag is given
-    pub default: Option<String>,
     #[serde(default)]
     pub variables: Option<HashMap<String, String>>,
 }
 
-/// Walk up from `start_dir` looking for `.phyllotaxis.yaml`.
-/// Returns `(config, directory_containing_config)` if found.
-pub fn load_config(start_dir: &Path) -> Option<(Config, PathBuf)> {
+/// Holds configs from both scopes. Each scope is optional — project config requires
+/// a `.phyllotaxis/` directory above cwd; user config requires `~/.config/phyllotaxis/`.
+#[derive(Debug, Default)]
+pub struct ScopedConfig {
+    /// Project config + the directory containing `.phyllotaxis/`
+    pub project: Option<(Config, PathBuf)>,
+    /// User-scope config (no associated directory — paths are absolute in user config)
+    pub user: Option<Config>,
+}
+
+/// Walk up from `start_dir` looking for `.phyllotaxis/config.yaml`.
+/// Also loads user-scope config from `~/.config/phyllotaxis/config.yaml`.
+pub fn load_config(start_dir: &Path) -> ScopedConfig {
+    let project = find_project_config(start_dir);
+    let user = load_user_config();
+    ScopedConfig { project, user }
+}
+
+fn find_project_config(start_dir: &Path) -> Option<(Config, PathBuf)> {
     let mut dir = start_dir.to_path_buf();
     loop {
-        let config_path = dir.join(".phyllotaxis.yaml");
+        let config_path = dir.join(".phyllotaxis").join("config.yaml");
         if config_path.is_file() {
             let content = match std::fs::read_to_string(&config_path) {
                 Ok(c) => c,
@@ -44,51 +58,80 @@ pub fn load_config(start_dir: &Path) -> Option<(Config, PathBuf)> {
     }
 }
 
-/// Resolve the document file path using the priority chain:
-/// 1. `--doc <name>` — look up in `documents` map in config
-/// 2. `--doc <path>` — treat as file path (resolve relative to cwd)
-/// 3. Config `default` → resolve from `documents` map
-/// 4. Config single `document` field (backward compat)
-/// 5. Auto-detect in start_dir (files containing "openapi:" in first 200 bytes)
-/// 6. Error with helpful message
-pub fn resolve_doc_path(
-    doc_flag: Option<&str>,
-    config: &Option<(Config, PathBuf)>,
-    start_dir: &Path,
-) -> Result<PathBuf> {
-    // Helper: resolve a document path string relative to config_dir
-    let resolve_named = |name: &str, config_dir: &Path| -> Option<PathBuf> {
-        let path = PathBuf::from(name);
-        let resolved = if path.is_absolute() {
-            path
-        } else {
-            config_dir.join(name)
-        };
-        if resolved.is_file() {
-            Some(resolved)
-        } else {
-            None
+fn load_user_config() -> Option<Config> {
+    let config_path = user_config_path()?;
+    if !config_path.is_file() {
+        return None;
+    }
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Warning: could not read {}: {}", config_path.display(), e);
+            return None;
         }
     };
+    match serde_yaml_ng::from_str::<Config>(&content) {
+        Ok(config) => Some(config),
+        Err(e) => {
+            eprintln!("Warning: could not parse {}: {}", config_path.display(), e);
+            None
+        }
+    }
+}
 
-    // 1 & 2. --doc flag
+/// Returns `~/.config/phyllotaxis/config.yaml`, or None if home dir cannot be determined.
+pub fn user_config_path() -> Option<PathBuf> {
+    dirs_next::home_dir().map(|h| h.join(".config").join("phyllotaxis").join("config.yaml"))
+}
+
+/// Returns `.phyllotaxis/config.yaml` relative to the given project root.
+pub fn project_config_path(project_root: &Path) -> PathBuf {
+    project_root.join(".phyllotaxis").join("config.yaml")
+}
+
+/// Resolve the document file path using the priority chain:
+///
+/// 1. `--doc <name>` — look up in project docs first, then user docs, then treat as file path
+/// 2. `PHYLLOTAXIS_DOCUMENT` env var
+/// 3. Project active doc
+/// 4. User active doc
+/// 5. Auto-detect in start_dir
+/// 6. Error
+pub fn resolve_doc_path(
+    doc_flag: Option<&str>,
+    scoped: &ScopedConfig,
+    start_dir: &Path,
+) -> Result<PathBuf> {
+    // 1. --doc flag
     if let Some(doc) = doc_flag {
-        // Try as a named document in the documents map first
-        if let Some((cfg, config_dir)) = config {
-            if let Some(named_path) = cfg.documents.get(doc) {
-                if let Some(resolved) = resolve_named(named_path, config_dir) {
-                    return Ok(resolved);
+        // Try project docs first
+        if let Some((cfg, root)) = &scoped.project {
+            if let Some(rel) = cfg.documents.get(doc) {
+                return resolve_relative(rel, root).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Named document '{}' → '{}' not found (from {})",
+                        doc,
+                        rel,
+                        root.display()
+                    )
+                });
+            }
+        }
+        // Try user docs next
+        if let Some(cfg) = &scoped.user {
+            if let Some(path_str) = cfg.documents.get(doc) {
+                let p = PathBuf::from(path_str);
+                if p.is_file() {
+                    return Ok(p);
                 }
                 bail!(
-                    "Named document '{}' points to '{}' which was not found (resolved from {})",
+                    "Named document '{}' → '{}' not found in user config",
                     doc,
-                    named_path,
-                    config_dir.display()
+                    path_str
                 );
             }
         }
-
-        // Fall back to treating as a file path
+        // Fall back to literal file path
         let path = PathBuf::from(doc);
         let resolved = if path.is_absolute() {
             path
@@ -104,7 +147,7 @@ pub fn resolve_doc_path(
         );
     }
 
-    // 2b. PHYLLOTAXIS_DOCUMENT env var
+    // 2. PHYLLOTAXIS_DOCUMENT env var
     if let Ok(env_doc) = std::env::var("PHYLLOTAXIS_DOCUMENT") {
         if !env_doc.is_empty() {
             let path = PathBuf::from(&env_doc);
@@ -123,45 +166,50 @@ pub fn resolve_doc_path(
         }
     }
 
-    // 3. Config default from documents map
-    if let Some((cfg, config_dir)) = config {
-        if !cfg.documents.is_empty() {
-            let default_name = cfg.default.as_deref().unwrap_or_default();
-            if let Some(named_path) = cfg.documents.get(default_name) {
-                if let Some(resolved) = resolve_named(named_path, config_dir) {
-                    return Ok(resolved);
+    // 3. Project active doc
+    if let Some((cfg, root)) = &scoped.project {
+        if let Some(active) = &cfg.active {
+            if let Some(rel) = cfg.documents.get(active.as_str()) {
+                if let Some(p) = resolve_relative(rel, root) {
+                    return Ok(p);
                 }
-            }
-            // No default set or default not found — error if multiple documents exist
-            if cfg.default.is_none() {
-                let names: Vec<&str> = cfg.documents.keys().map(String::as_str).collect();
                 bail!(
-                    "Multiple documents configured but no default set. Use --doc <name>.\n\
-                     Available: {}",
-                    names.join(", ")
+                    "Active document '{}' → '{}' not found (from {})",
+                    active,
+                    rel,
+                    root.display()
+                );
+            }
+            bail!("Active document '{}' not found in project config.", active);
+        }
+        // Project config exists but no active — if there are docs, tell the user to pick
+        if !cfg.documents.is_empty() {
+            let names: Vec<&str> = cfg.documents.keys().map(String::as_str).collect();
+            bail!(
+                "Project has documents configured but no active set.\n\
+                 Use: phyll --set-doc <name>  (available: {})",
+                names.join(", ")
+            );
+        }
+    }
+
+    // 4. User active doc
+    if let Some(cfg) = &scoped.user {
+        if let Some(active) = &cfg.active {
+            if let Some(path_str) = cfg.documents.get(active.as_str()) {
+                let p = PathBuf::from(path_str);
+                if p.is_file() {
+                    return Ok(p);
+                }
+                bail!(
+                    "Active user document '{}' → '{}' not found.",
+                    active,
+                    path_str
                 );
             }
             bail!(
-                "Default document '{}' not found in documents map.",
-                default_name
-            );
-        }
-
-        // 4. Backward compat: single `document` field
-        if let Some(doc) = &cfg.document {
-            let path = PathBuf::from(doc);
-            let resolved = if path.is_absolute() {
-                path
-            } else {
-                config_dir.join(doc)
-            };
-            if resolved.is_file() {
-                return Ok(resolved);
-            }
-            bail!(
-                "Document from config not found: {} (resolved from {})",
-                resolved.display(),
-                config_dir.display()
+                "Active user document '{}' not found in user config.",
+                active
             );
         }
     }
@@ -175,17 +223,32 @@ pub fn resolve_doc_path(
     bail!(
         "No OpenAPI document found. Tried:\n\
          1. --doc flag (not provided)\n\
-         2. .phyllotaxis.yaml config ({})\n\
-         3. Auto-detect in {} (no openapi files found)\n\n\
-         Run 'phyll init' to configure a document, or pass one directly:\n\
-         \x20 phyll --doc ./path/to/openapi.yaml",
-        if config.is_some() {
-            "found, no document configured"
+         2. PHYLLOTAXIS_DOCUMENT env var (not set)\n\
+         3. Project config ({})\n\
+         4. User config (~/.config/phyllotaxis/config.yaml)\n\
+         5. Auto-detect in {} (no openapi files found)\n\n\
+         Add a document to get started:\n\
+         \x20 phyll --add-doc ./path/to/openapi.yaml\n\
+         \x20 phyll --doc ./path/to/openapi.yaml  (one-shot, no config needed)",
+        if scoped.project.is_some() {
+            "found, no active doc"
         } else {
             "not found"
         },
         start_dir.display(),
     )
+}
+
+/// Resolve a relative path string against a base directory.
+/// Returns None if the resolved path is not a file.
+fn resolve_relative(rel: &str, base: &Path) -> Option<PathBuf> {
+    let p = PathBuf::from(rel);
+    let resolved = if p.is_absolute() { p } else { base.join(p) };
+    if resolved.is_file() {
+        Some(resolved)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -197,8 +260,8 @@ pub struct LoadedDocument {
 /// Load and parse an OpenAPI document. Resolves the document path, reads the file,
 /// and parses it as YAML (falling back to JSON).
 pub fn load_document(doc_flag: Option<&str>, start_dir: &Path) -> Result<LoadedDocument> {
-    let config_result = load_config(start_dir);
-    let spec_path = resolve_doc_path(doc_flag, &config_result, start_dir)?;
+    let scoped = load_config(start_dir);
+    let spec_path = resolve_doc_path(doc_flag, &scoped, start_dir)?;
 
     // Guard against accidentally huge document files (100 MB limit)
     let metadata = std::fs::metadata(&spec_path)
@@ -231,7 +294,7 @@ pub fn load_document(doc_flag: Option<&str>, start_dir: &Path) -> Result<LoadedD
     let api: openapiv3::OpenAPI = serde_json::from_value(value)
         .with_context(|| format!("Failed to parse {}", spec_path.display()))?;
 
-    let config = config_result.map(|(c, _)| c).unwrap_or_default();
+    let config = scoped.project.map(|(c, _)| c).unwrap_or_default();
 
     Ok(LoadedDocument { api, config })
 }
@@ -490,36 +553,65 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn test_config_struct_active_field() {
+        let yaml = "active: pets\ndocuments:\n  pets: ./api/petstore.yaml\n";
+        let config: Config = serde_yaml_ng::from_str(yaml).expect("should parse");
+        assert_eq!(config.active.as_deref(), Some("pets"));
+        assert_eq!(
+            config.documents.get("pets").map(String::as_str),
+            Some("./api/petstore.yaml")
+        );
+    }
+
+    #[test]
+    fn test_config_struct_rejects_old_document_field() {
+        // Old single `document:` key must not silently round-trip as active
+        let yaml = "document: ./openapi.yaml\n";
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap_or_default();
+        // The field doesn't exist in new struct — unknown fields are ignored by serde
+        // What matters is that active is None and documents is empty
+        assert!(config.active.is_none());
+        assert!(config.documents.is_empty());
+    }
+
+    #[test]
     fn test_load_config_not_found() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = load_config(tmp.path());
-        assert!(result.is_none());
+        let scoped = load_config(tmp.path());
+        assert!(scoped.project.is_none(), "no project config in empty dir");
     }
 
     #[test]
     fn test_load_config_found() {
         let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join(".phyllotaxis");
+        fs::create_dir_all(&config_dir).unwrap();
         fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "document: ./openapi.yaml\n",
+            config_dir.join("config.yaml"),
+            "active: api\ndocuments:\n  api: ./openapi.yaml\n",
         )
         .unwrap();
 
-        let (config, config_dir) = load_config(tmp.path()).expect("should find config");
-        assert_eq!(config.document.as_deref(), Some("./openapi.yaml"));
-        assert_eq!(config_dir, tmp.path());
+        let scoped = load_config(tmp.path());
+        let (config, root) = scoped.project.expect("should find project config");
+        assert_eq!(config.active.as_deref(), Some("api"));
+        assert!(config.documents.contains_key("api"));
+        assert_eq!(root, tmp.path());
     }
 
     #[test]
     fn test_load_config_with_variables() {
         let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join(".phyllotaxis");
+        fs::create_dir_all(&config_dir).unwrap();
         fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "document: ./openapi.yaml\nvariables:\n  tenant: acme-corp\n",
+            config_dir.join("config.yaml"),
+            "active: api\ndocuments:\n  api: ./openapi.yaml\nvariables:\n  tenant: acme-corp\n",
         )
         .unwrap();
 
-        let (config, _) = load_config(tmp.path()).expect("should find config");
+        let scoped = load_config(tmp.path());
+        let (config, _) = scoped.project.expect("should find config");
         let vars = config.variables.as_ref().unwrap();
         assert_eq!(vars.get("tenant").unwrap(), "acme-corp");
     }
@@ -534,15 +626,8 @@ mod tests {
         )
         .unwrap();
 
-        // Also write a config pointing to a different file
-        fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "document: ./other-doc.yaml\n",
-        )
-        .unwrap();
-
-        let config = load_config(tmp.path());
-        let result = resolve_doc_path(Some(spec_path.to_str().unwrap()), &config, tmp.path());
+        let scoped = ScopedConfig::default();
+        let result = resolve_doc_path(Some(spec_path.to_str().unwrap()), &scoped, tmp.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), spec_path);
     }
@@ -556,14 +641,17 @@ mod tests {
             "openapi: \"3.0.0\"\ninfo:\n  title: Test\n  version: \"1.0\"\npaths: {}\n",
         )
         .unwrap();
-        fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "document: ./openapi.yaml\n",
-        )
-        .unwrap();
 
-        let config = load_config(tmp.path());
-        let result = resolve_doc_path(None, &config, tmp.path());
+        let mut cfg = Config::default();
+        cfg.active = Some("api".to_string());
+        cfg.documents
+            .insert("api".to_string(), "./openapi.yaml".to_string());
+        let scoped = ScopedConfig {
+            project: Some((cfg, tmp.path().to_path_buf())),
+            user: None,
+        };
+
+        let result = resolve_doc_path(None, &scoped, tmp.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), spec_path);
     }
@@ -578,7 +666,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = resolve_doc_path(None, &None, tmp.path());
+        let scoped = ScopedConfig::default();
+        let result = resolve_doc_path(None, &scoped, tmp.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), spec_path);
     }
@@ -586,7 +675,8 @@ mod tests {
     #[test]
     fn test_resolve_error_when_nothing_found() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = resolve_doc_path(None, &None, tmp.path());
+        let scoped = ScopedConfig::default();
+        let result = resolve_doc_path(None, &scoped, tmp.path());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("No OpenAPI document found"), "Error: {}", err);
@@ -597,15 +687,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sub = tmp.path().join("sub").join("deep");
         fs::create_dir_all(&sub).unwrap();
+        let config_dir = tmp.path().join(".phyllotaxis");
+        fs::create_dir_all(&config_dir).unwrap();
         fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "document: ./openapi.yaml\n",
+            config_dir.join("config.yaml"),
+            "active: api\ndocuments:\n  api: ./openapi.yaml\n",
         )
         .unwrap();
 
-        let (config, config_dir) = load_config(&sub).expect("should find config by walking up");
-        assert_eq!(config.document.as_deref(), Some("./openapi.yaml"));
-        assert_eq!(config_dir, tmp.path());
+        let scoped = load_config(&sub);
+        let (config, root) = scoped.project.expect("should find config by walking up");
+        assert_eq!(config.active.as_deref(), Some("api"));
+        assert_eq!(root, tmp.path());
     }
 
     #[test]
@@ -659,14 +752,17 @@ mod tests {
             "openapi: \"3.0.0\"\ninfo:\n  title: Public\n  version: \"1.0\"\npaths: {}\n",
         )
         .unwrap();
-        fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "documents:\n  public: ./public.yaml\ndefault: public\n",
-        )
-        .unwrap();
 
-        let config = load_config(tmp.path());
-        let result = resolve_doc_path(Some("public"), &config, tmp.path());
+        let mut cfg = Config::default();
+        cfg.active = Some("public".to_string());
+        cfg.documents
+            .insert("public".to_string(), "./public.yaml".to_string());
+        let scoped = ScopedConfig {
+            project: Some((cfg, tmp.path().to_path_buf())),
+            user: None,
+        };
+
+        let result = resolve_doc_path(Some("public"), &scoped, tmp.path());
         assert!(
             result.is_ok(),
             "Should resolve named document: {:?}",
@@ -676,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_uses_default_from_documents() {
+    fn test_resolve_uses_active_from_documents() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_path = tmp.path().join("public.yaml");
         fs::write(
@@ -684,21 +780,23 @@ mod tests {
             "openapi: \"3.0.0\"\ninfo:\n  title: Public\n  version: \"1.0\"\npaths: {}\n",
         )
         .unwrap();
-        fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "documents:\n  public: ./public.yaml\ndefault: public\n",
-        )
-        .unwrap();
 
-        let config = load_config(tmp.path());
-        // No --doc flag: should use default
-        let result = resolve_doc_path(None, &config, tmp.path());
-        assert!(result.is_ok(), "Should use default document: {:?}", result);
+        let mut cfg = Config::default();
+        cfg.active = Some("public".to_string());
+        cfg.documents
+            .insert("public".to_string(), "./public.yaml".to_string());
+        let scoped = ScopedConfig {
+            project: Some((cfg, tmp.path().to_path_buf())),
+            user: None,
+        };
+
+        let result = resolve_doc_path(None, &scoped, tmp.path());
+        assert!(result.is_ok(), "Should use active document: {:?}", result);
         assert_eq!(result.unwrap(), spec_path);
     }
 
     #[test]
-    fn test_resolve_errors_on_multi_document_no_default() {
+    fn test_resolve_errors_on_multi_document_no_active() {
         let tmp = tempfile::tempdir().unwrap();
         let spec_a = tmp.path().join("a.yaml");
         let spec_b = tmp.path().join("b.yaml");
@@ -712,47 +810,28 @@ mod tests {
             "openapi: \"3.0.0\"\ninfo:\n  title: B\n  version: \"1.0\"\npaths: {}\n",
         )
         .unwrap();
-        fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "documents:\n  a: ./a.yaml\n  b: ./b.yaml\n",
-        )
-        .unwrap();
 
-        let config = load_config(tmp.path());
-        let result = resolve_doc_path(None, &config, tmp.path());
+        let mut cfg = Config::default();
+        cfg.documents
+            .insert("a".to_string(), "./a.yaml".to_string());
+        cfg.documents
+            .insert("b".to_string(), "./b.yaml".to_string());
+        let scoped = ScopedConfig {
+            project: Some((cfg, tmp.path().to_path_buf())),
+            user: None,
+        };
+
+        let result = resolve_doc_path(None, &scoped, tmp.path());
         assert!(
             result.is_err(),
-            "Should error when multiple documents and no default"
+            "Should error when multiple documents and no active"
         );
+        let err = result.unwrap_err().to_string();
         assert!(
-            result.unwrap_err().to_string().contains("--doc"),
-            "Error should mention --doc"
+            err.contains("--set-doc"),
+            "Error should mention --set-doc: {}",
+            err
         );
-    }
-
-    #[test]
-    fn test_backward_compat_single_document_field() {
-        let tmp = tempfile::tempdir().unwrap();
-        let spec_path = tmp.path().join("api.yaml");
-        fs::write(
-            &spec_path,
-            "openapi: \"3.0.0\"\ninfo:\n  title: API\n  version: \"1.0\"\npaths: {}\n",
-        )
-        .unwrap();
-        fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "document: ./api.yaml\n",
-        )
-        .unwrap();
-
-        let config = load_config(tmp.path());
-        let result = resolve_doc_path(None, &config, tmp.path());
-        assert!(
-            result.is_ok(),
-            "Single document: field should still work: {:?}",
-            result
-        );
-        assert_eq!(result.unwrap(), spec_path);
     }
 
     #[test]
@@ -767,7 +846,8 @@ mod tests {
         .unwrap();
 
         unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", spec_path.to_str().unwrap()) };
-        let result = resolve_doc_path(None, &None, tmp.path());
+        let scoped = ScopedConfig::default();
+        let result = resolve_doc_path(None, &scoped, tmp.path());
         unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(result.is_ok(), "Env var should resolve: {:?}", result);
@@ -792,7 +872,8 @@ mod tests {
         .unwrap();
 
         unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", env_spec.to_str().unwrap()) };
-        let result = resolve_doc_path(Some(flag_spec.to_str().unwrap()), &None, tmp.path());
+        let scoped = ScopedConfig::default();
+        let result = resolve_doc_path(Some(flag_spec.to_str().unwrap()), &scoped, tmp.path());
         unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(result.is_ok());
@@ -815,15 +896,17 @@ mod tests {
             "openapi: \"3.0.0\"\ninfo:\n  title: Env\n  version: \"1.0\"\npaths: {}\n",
         )
         .unwrap();
-        fs::write(
-            tmp.path().join(".phyllotaxis.yaml"),
-            "document: ./config-doc.yaml\n",
-        )
-        .unwrap();
+        let mut cfg = Config::default();
+        cfg.active = Some("config".to_string());
+        cfg.documents
+            .insert("config".to_string(), "./config-spec.yaml".to_string());
+        let scoped = ScopedConfig {
+            project: Some((cfg, tmp.path().to_path_buf())),
+            user: None,
+        };
 
-        let config = load_config(tmp.path());
         unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", env_spec.to_str().unwrap()) };
-        let result = resolve_doc_path(None, &config, tmp.path());
+        let result = resolve_doc_path(None, &scoped, tmp.path());
         unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(result.is_ok());
@@ -836,7 +919,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", "/nonexistent/path.yaml") };
-        let result = resolve_doc_path(None, &None, tmp.path());
+        let scoped = ScopedConfig::default();
+        let result = resolve_doc_path(None, &scoped, tmp.path());
         unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(
@@ -864,7 +948,8 @@ mod tests {
         .unwrap();
 
         unsafe { std::env::set_var("PHYLLOTAXIS_DOCUMENT", "") };
-        let result = resolve_doc_path(None, &None, tmp.path());
+        let scoped = ScopedConfig::default();
+        let result = resolve_doc_path(None, &scoped, tmp.path());
         unsafe { std::env::remove_var("PHYLLOTAXIS_DOCUMENT") };
 
         assert!(

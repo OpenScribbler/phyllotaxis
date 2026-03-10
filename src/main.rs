@@ -62,6 +62,34 @@ struct Cli {
     #[arg(long)]
     doc: Option<PathBuf>,
 
+    /// Add a document to the library (does not make it active)
+    #[arg(long)]
+    add_doc: Option<PathBuf>,
+
+    /// Switch active document (nickname or file path); adds if path given
+    #[arg(long)]
+    set_doc: Option<String>,
+
+    /// Clear the active document setting
+    #[arg(long)]
+    unset_doc: bool,
+
+    /// Remove a document from the library by nickname
+    #[arg(long)]
+    remove_doc: Option<String>,
+
+    /// Show all configured documents
+    #[arg(long)]
+    list_docs: bool,
+
+    /// Nickname for --add-doc or --set-doc
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Apply --add-doc / --set-doc to user config instead of project config
+    #[arg(long)]
+    global: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -164,9 +192,76 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Init does not support --json; it's interactive and always writes to .phyllotaxis.yaml
+    // Init does not support --json; it's interactive and always writes to .phyllotaxis/config.yaml
     if let Some(Commands::Init { doc_path }) = &cli.command {
         commands::init::run_init(&cwd, doc_path.as_deref())?;
+        return Ok(());
+    }
+
+    // ─── Document management operations (mutating, no spec needed) ───────────────
+
+    let scoped = spec::load_config(&cwd);
+    let project_root = scoped.project.as_ref().map(|(_, root)| root.as_path());
+
+    if cli.list_docs {
+        if cli.json {
+            commands::init::run_list_docs_json(&scoped)?;
+        } else {
+            commands::init::run_list_docs(&scoped)?;
+        }
+        return Ok(());
+    }
+
+    if let Some(ref doc_path) = cli.add_doc {
+        let path_str = doc_path.to_string_lossy();
+        commands::init::run_add_doc(
+            project_root.or(Some(cwd.as_path())),
+            cli.global,
+            &path_str,
+            cli.name.as_deref(),
+        )?;
+        return Ok(());
+    }
+
+    if let Some(ref target) = cli.set_doc {
+        // Determine which scope owns this nickname (design: set active in owning scope)
+        let in_project = scoped
+            .project
+            .as_ref()
+            .map(|(cfg, _)| cfg.documents.contains_key(target.as_str()))
+            .unwrap_or(false);
+        let in_user = scoped
+            .user
+            .as_ref()
+            .map(|cfg| cfg.documents.contains_key(target.as_str()))
+            .unwrap_or(false);
+
+        let effective_user_scope = if cli.global {
+            true
+        } else if in_project {
+            false
+        } else if in_user {
+            true
+        } else {
+            cli.global || project_root.is_none()
+        };
+
+        commands::init::run_set_doc(
+            project_root.or(Some(cwd.as_path())),
+            effective_user_scope,
+            target,
+            cli.name.as_deref(),
+        )?;
+        return Ok(());
+    }
+
+    if cli.unset_doc {
+        commands::init::run_unset_doc(project_root.or(Some(cwd.as_path())), cli.global)?;
+        return Ok(());
+    }
+
+    if let Some(ref name) = cli.remove_doc {
+        commands::init::run_remove_doc(project_root.or(Some(cwd.as_path())), cli.global, name)?;
         return Ok(());
     }
 
