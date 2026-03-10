@@ -154,6 +154,18 @@ pub fn run_add_doc(
 ) -> anyhow::Result<()> {
     let (config_path, stored_path) = resolve_write_target(project_root, user_scope, doc_path_str)?;
 
+    // Validate file exists (user-scope already validates via canonicalize in resolve_write_target)
+    if !user_scope {
+        let check_path = if let Some(root) = project_root {
+            root.join(doc_path_str)
+        } else {
+            PathBuf::from(doc_path_str)
+        };
+        if !check_path.is_file() && !PathBuf::from(doc_path_str).is_file() {
+            bail!("Document not found: {}", doc_path_str);
+        }
+    }
+
     let nickname = resolve_nickname(name, doc_path_str)?;
 
     let mut config = load_or_default_config(&config_path)?;
@@ -883,6 +895,17 @@ mod tests {
         let result = run_add_doc(Some(tmp.path()), false, "./petstore.yaml", Some("pets"));
         assert!(result.is_err(), "Duplicate name should error");
         assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn test_add_doc_nonexistent_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = run_add_doc(Some(tmp.path()), false, "./nonexistent.yaml", Some("ghost"));
+        assert!(result.is_err(), "Adding nonexistent file should error");
+        assert!(
+            result.unwrap_err().to_string().contains("not found"),
+            "Error should mention file not found"
+        );
     }
 
     #[test]
