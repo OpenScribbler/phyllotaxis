@@ -66,7 +66,10 @@ struct Cli {
     #[arg(long)]
     add_doc: Option<PathBuf>,
 
-    /// Switch active document (nickname or file path); adds if path given
+    /// Switch active document by nickname, or add+activate a file path.
+    /// Writes to the config that owns the nickname; for new file paths,
+    /// defaults to project config (.phyllotaxis/) if one exists, otherwise
+    /// user config (~/.config/phyllotaxis/). Use --global to force user config
     #[arg(long)]
     set_doc: Option<String>,
 
@@ -82,11 +85,12 @@ struct Cli {
     #[arg(long)]
     list_docs: bool,
 
-    /// Nickname for --add-doc or --set-doc
+    /// Nickname for --add-doc or --set-doc (auto-derived from filename if omitted)
     #[arg(long)]
     name: Option<String>,
 
-    /// Apply --add-doc / --set-doc to user config instead of project config
+    /// Force --add-doc / --set-doc to write to user config (~/.config/phyllotaxis/)
+    /// instead of project config (.phyllotaxis/)
     #[arg(long)]
     global: bool,
 
