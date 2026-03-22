@@ -12,11 +12,17 @@ fn run(args: &[&str]) -> (String, String, i32) {
     )
 }
 
-/// Helper to run with the petstore fixture as --doc
+/// Helper to run with the petstore fixture as --doc.
+/// Uses --text to force text output since test harness pipes stdout (triggering auto-detect JSON).
 fn run_with_petstore(args: &[&str]) -> (String, String, i32) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    // If args already include --json, don't add --text (they conflict)
+    let has_json = args.contains(&"--json");
     let mut full_args = vec!["--doc", &spec];
+    if !has_json {
+        full_args.push("--text");
+    }
     full_args.extend_from_slice(args);
     run(&full_args)
 }
@@ -414,12 +420,18 @@ fn test_json_compact_when_piped() {
 }
 
 /// Run phyllotaxis with the petstore fixture, extra env vars, and captured stdout (non-TTY).
+/// Uses --text to force text output since test harness pipes stdout.
 fn run_with_petstore_env(args: &[&str], env: &[(&str, &str)]) -> (String, String, i32) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    let has_json = args.contains(&"--json");
+    let mut full_args: Vec<&str> = vec!["--doc", &spec];
+    if !has_json {
+        full_args.push("--text");
+    }
+    full_args.extend_from_slice(args);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_phyllotaxis"))
-        .args(["--doc", &spec])
-        .args(args)
+        .args(&full_args)
         .envs(env.iter().copied())
         .output()
         .expect("failed to run phyllotaxis binary");
@@ -648,10 +660,16 @@ fn test_completions_fish() {
 // ─── Task 23: Kitchen-sink coverage gap integration tests ───
 
 /// Helper to run with the kitchen-sink fixture as --doc
+/// Helper to run with the kitchen-sink fixture as --doc.
+/// Uses --text to force text output since test harness pipes stdout.
 fn run_with_kitchen_sink(args: &[&str]) -> (String, String, i32) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
+    let has_json = args.contains(&"--json");
     let mut full_args = vec!["--doc", &spec];
+    if !has_json {
+        full_args.push("--text");
+    }
     full_args.extend_from_slice(args);
     run(&full_args)
 }
@@ -946,7 +964,7 @@ fn test_overview_shows_callback_count() {
 fn test_overview_shows_top_resources() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/kitchen-sink.yaml", manifest_dir);
-    let (stdout, _stderr, code) = run(&["--doc", &spec]);
+    let (stdout, _stderr, code) = run(&["--doc", &spec, "--text"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Top Resources"),
@@ -1398,11 +1416,16 @@ fn test_used_by_flag() {
 
 // ─── External $ref dereferencing ──────────────────────────────────────────
 
-/// Helper to run with the multi-file fixture as --doc
+/// Helper to run with the multi-file fixture as --doc.
+/// Uses --text to force text output since test harness pipes stdout.
 fn run_with_multi_file(args: &[&str]) -> (String, String, i32) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let spec = format!("{}/tests/fixtures/multi-file/openapi.yaml", manifest_dir);
+    let has_json = args.contains(&"--json");
     let mut full_args = vec!["--doc", &spec];
+    if !has_json {
+        full_args.push("--text");
+    }
     full_args.extend_from_slice(args);
     run(&full_args)
 }
@@ -1552,7 +1575,8 @@ components:
     let spec_path = tmp.path().join("openapi.yaml");
     std::fs::write(&spec_path, spec_content).unwrap();
 
-    let (stdout, _stderr, code) = run(&["--doc", spec_path.to_str().unwrap(), "--schemas"]);
+    let (stdout, _stderr, code) =
+        run(&["--doc", spec_path.to_str().unwrap(), "--schemas", "--text"]);
 
     assert_eq!(
         code, 0,
@@ -1562,5 +1586,233 @@ components:
         stdout.contains("A"),
         "Schema A should appear in output. Got: {}",
         &stdout[..300.min(stdout.len())]
+    );
+}
+
+// ─── --for: JSON Pointer navigation ───────────────────────────────────────
+
+#[test]
+fn test_for_schema_returns_json() {
+    let (stdout, _stderr, code) = run_with_petstore(&["--for", "/components/schemas/Pet"]);
+    assert_eq!(code, 0);
+    let val: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(val["type"], "object", "Pet schema should be an object type");
+    assert!(
+        val["properties"]["name"].is_object(),
+        "Pet should have a name property"
+    );
+}
+
+#[test]
+fn test_for_strips_hash_prefix() {
+    let (stdout_hash, _, code1) = run_with_petstore(&["--for", "#/components/schemas/Pet"]);
+    let (stdout_bare, _, code2) = run_with_petstore(&["--for", "/components/schemas/Pet"]);
+    assert_eq!(code1, 0);
+    assert_eq!(code2, 0);
+    assert_eq!(
+        stdout_hash, stdout_bare,
+        "# prefix and bare pointer should produce identical output"
+    );
+}
+
+#[test]
+fn test_for_info_section() {
+    let (stdout, _stderr, code) = run_with_petstore(&["--for", "/info"]);
+    assert_eq!(code, 0);
+    let val: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(val["title"], "Petstore API");
+    assert_eq!(val["version"], "1.0.0");
+}
+
+#[test]
+fn test_for_deep_path() {
+    let (stdout, _stderr, code) =
+        run_with_petstore(&["--for", "/components/schemas/Pet/properties/name"]);
+    assert_eq!(code, 0);
+    let val: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(val["type"], "string");
+}
+
+#[test]
+fn test_for_not_found() {
+    let (_stdout, stderr, code) = run_with_petstore(&["--for", "/nonexistent/path"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("not found"),
+        "Should report pointer not found. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_for_invalid_pointer_no_slash() {
+    let (_stdout, stderr, code) = run_with_petstore(&["--for", "bad-pointer"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("must start with '/'"),
+        "Should report invalid pointer. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_for_not_found_json_mode() {
+    let (_stdout, stderr, code) = run_with_petstore(&["--for", "/nonexistent", "--json"]);
+    assert_ne!(code, 0);
+    let val: serde_json::Value =
+        serde_json::from_str(&stderr).expect("JSON mode error should be valid JSON");
+    assert!(val["error"].as_str().unwrap().contains("not found"));
+}
+
+#[test]
+fn test_for_combined_with_view_flag_errors() {
+    let (_stdout, stderr, code) = run_with_petstore(&["--for", "/info", "--schemas"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("cannot be combined"),
+        "Should reject --for with view flags. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_for_json_mode_compact() {
+    let (stdout, _stderr, code) = run_with_petstore(&["--for", "/info", "--json"]);
+    assert_eq!(code, 0);
+    // Compact JSON should not contain newlines (single line)
+    assert!(
+        !stdout.trim().contains('\n'),
+        "JSON mode output should be compact (single line). Got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_for_empty_pointer_returns_root() {
+    let (stdout, _stderr, code) = run_with_petstore(&["--for", "#"]);
+    assert_eq!(code, 0);
+    let val: serde_json::Value =
+        serde_json::from_str(&stdout).expect("output should be valid JSON");
+    assert_eq!(
+        val["openapi"], "3.0.4",
+        "Empty pointer should return entire document"
+    );
+    assert!(val["paths"].is_object(), "Root should contain paths");
+}
+
+// ─── Auto-detect output format ────────────────────────────────────────────
+
+#[test]
+fn test_autodetect_piped_produces_json() {
+    // run() pipes stdout, so without --text or --json, auto-detect should produce JSON
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    let (stdout, _stderr, code) = run(&["--doc", &spec]);
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
+        panic!(
+            "Piped stdout should auto-detect to JSON. Got:\n{}",
+            &stdout[..200.min(stdout.len())]
+        )
+    });
+    assert!(
+        parsed.get("title").is_some() || parsed.get("endpoint_count").is_some(),
+        "Auto-detected JSON should contain overview fields"
+    );
+}
+
+#[test]
+fn test_text_flag_forces_text_when_piped() {
+    // --text should force text output even when piped
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    let (stdout, _stderr, code) = run(&["--doc", &spec, "--text"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("API: Petstore API"),
+        "--text should force text output. Got:\n{}",
+        &stdout[..200.min(stdout.len())]
+    );
+}
+
+#[test]
+fn test_json_and_text_conflict() {
+    // --json and --text together should produce an error
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    let (_stdout, stderr, code) = run(&["--doc", &spec, "--json", "--text"]);
+    assert_ne!(code, 0, "--json and --text should conflict");
+    assert!(
+        stderr.contains("--json") && stderr.contains("--text"),
+        "Error should mention conflicting flags. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_autodetect_piped_resources_produces_json() {
+    // Verify auto-detect works for --resources too, not just overview
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    let (stdout, _stderr, code) = run(&["--doc", &spec, "--resources"]);
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
+        panic!(
+            "Piped --resources should auto-detect to JSON. Got:\n{}",
+            &stdout[..200.min(stdout.len())]
+        )
+    });
+    assert!(
+        parsed.is_array() || parsed.is_object(),
+        "Auto-detected JSON for --resources should be structured"
+    );
+}
+
+// ─── Remote URL support ───────────────────────────────────────────────────
+
+#[test]
+fn test_url_invalid_host_produces_error() {
+    // A URL that can't connect should produce a clean error, not a panic
+    let (_stdout, stderr, code) = run(&["https://not-a-real-host.invalid/spec.yaml", "--text"]);
+    assert_ne!(code, 0, "Invalid URL should fail");
+    assert!(
+        stderr.contains("Failed to fetch") || stderr.contains("error"),
+        "Should show fetch error. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_url_with_doc_flag() {
+    // --doc with an invalid URL should also produce a clean error
+    let (_stdout, stderr, code) = run(&[
+        "--doc",
+        "https://not-a-real-host.invalid/spec.yaml",
+        "--text",
+    ]);
+    assert_ne!(code, 0, "Invalid URL via --doc should fail");
+    assert!(
+        stderr.contains("Failed to fetch") || stderr.contains("error"),
+        "Should show fetch error via --doc. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_refresh_flag_accepted() {
+    // --refresh should be accepted without error (even if there's nothing to refresh)
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let spec = format!("{}/tests/fixtures/petstore.yaml", manifest_dir);
+    let (stdout, _stderr, code) = run(&["--doc", &spec, "--text", "--refresh"]);
+    assert_eq!(
+        code, 0,
+        "--refresh should not interfere with local file loading"
+    );
+    assert!(
+        stdout.contains("Petstore API"),
+        "--refresh with local file should still work"
     );
 }

@@ -11,8 +11,8 @@ use std::path::PathBuf;
     about = "Progressive disclosure for OpenAPI documents (alias: phyll)"
 )]
 struct Cli {
-    /// OpenAPI document path (overrides config/env/auto-detect)
-    document: Option<PathBuf>,
+    /// OpenAPI document path or URL (overrides config/env/auto-detect)
+    document: Option<String>,
 
     /// List resource groups, or drill into a specific resource
     #[arg(long, num_args(0..=1), default_missing_value = "")]
@@ -38,9 +38,13 @@ struct Cli {
     #[arg(long)]
     used_by: bool,
 
-    /// Output in JSON format
-    #[arg(long, global = true)]
+    /// Output in JSON format (default when stdout is piped)
+    #[arg(long, global = true, conflicts_with = "text")]
     json: bool,
+
+    /// Output in text format (default when stdout is a terminal)
+    #[arg(long, global = true, conflicts_with = "json")]
+    text: bool,
 
     /// Recursively inline nested schemas (max depth 5)
     #[arg(long, global = true)]
@@ -50,6 +54,10 @@ struct Cli {
     #[arg(long, global = true)]
     related_limit: Option<usize>,
 
+    /// Extract a subtree by JSON Pointer (RFC 6901), e.g. '/components/schemas/Pet'
+    #[arg(long, value_name = "POINTER")]
+    r#for: Option<String>,
+
     /// Show related schemas inline after endpoint detail
     #[arg(long)]
     context: bool,
@@ -58,9 +66,9 @@ struct Cli {
     #[arg(long)]
     example: bool,
 
-    /// Named document from config, or path override
+    /// Named document from config, path, or URL override
     #[arg(long)]
-    doc: Option<PathBuf>,
+    doc: Option<String>,
 
     /// Add a document to the library (does not make it active)
     #[arg(long)]
@@ -93,6 +101,10 @@ struct Cli {
     /// instead of project config (.phyllotaxis/)
     #[arg(long)]
     global: bool,
+
+    /// Force re-download of remote URL specs (bypasses cache)
+    #[arg(long)]
+    refresh: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -159,8 +171,8 @@ fn detect_bin_name() -> String {
 fn main() -> std::process::ExitCode {
     human_panic::setup_panic!();
     let cli = Cli::parse();
-    let json = cli.json;
-    match run(cli) {
+    let json = resolve_output_format(cli.json, cli.text);
+    match run(cli, json) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             if e.downcast_ref::<PreformattedError>().is_some() {
@@ -175,7 +187,21 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run(cli: Cli) -> anyhow::Result<()> {
+/// Resolve whether to use JSON output:
+/// --json forces JSON, --text forces text, otherwise auto-detect from TTY.
+fn resolve_output_format(json_flag: bool, text_flag: bool) -> bool {
+    use std::io::IsTerminal;
+    if json_flag {
+        true
+    } else if text_flag {
+        false
+    } else {
+        // Auto-detect: piped → JSON, terminal → text
+        !std::io::stdout().is_terminal()
+    }
+}
+
+fn run(cli: Cli, json: bool) -> anyhow::Result<()> {
     use std::io::IsTerminal;
 
     let cwd = std::env::current_dir().context("Cannot determine current directory")?;
@@ -208,7 +234,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     let project_root = scoped.project.as_ref().map(|(_, root)| root.as_path());
 
     if cli.list_docs {
-        if cli.json {
+        if json {
             commands::init::run_list_docs_json(&scoped)?;
         } else {
             commands::init::run_list_docs(&scoped)?;
@@ -272,11 +298,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     // Migration guard: old subcommand names removed in v2.0.
     // They parse as the positional `document` argument and would confusingly fail.
     if let Some(ref doc) = cli.document {
-        let name = doc.to_string_lossy();
-        let migration_hint = match name.as_ref() {
+        let migration_hint = match doc.as_str() {
             "resources" | "endpoints" => Some(format!(
                 "Subcommand '{}' was removed in v2.0. Use: {} --resources [name]",
-                name, bin_name
+                doc, bin_name
             )),
             "schemas" => Some(format!(
                 "Subcommand 'schemas' was removed in v2.0. Use: {} --schemas [name]",
@@ -293,7 +318,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             _ => None,
         };
         if let Some(hint) = migration_hint {
-            if cli.json {
+            if json {
                 return Err(PreformattedError(json_error(&hint)).into());
             }
             anyhow::bail!("{}", hint);
@@ -301,19 +326,15 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     }
 
     // Resolve document: positional > --doc > config/env/auto-detect
-    let doc_path = cli
-        .document
-        .as_ref()
-        .or(cli.doc.as_ref())
-        .map(|p| p.to_string_lossy().to_string());
-    let loaded = spec::load_document(doc_path.as_deref(), &cwd)?;
+    let doc_flag = cli.document.as_deref().or(cli.doc.as_deref());
+    let loaded = spec::load_document(doc_flag, &cwd, cli.refresh)?;
 
     // Handle search subcommand
     if let Some(Commands::Search { term, limit }) = &cli.command {
         let term_trimmed = term.trim();
         if term_trimmed.is_empty() {
             let mut msg = "Please provide a search term.".to_string();
-            if !cli.json {
+            if !json {
                 msg.push_str(&format!(
                     "\nUse '{} --resources' or '{} --schemas' to list all items.",
                     bin_name, bin_name
@@ -322,13 +343,58 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             anyhow::bail!("{}", msg);
         }
         let results = commands::search::search(&loaded.api, term_trimmed);
-        let output = if cli.json {
+        let output = if json {
             render::json::render_search(&results, &bin_name, is_tty)
         } else {
             render::text::render_search(&results, &bin_name, *limit, is_tty)
         };
         println!("{}", output);
         return Ok(());
+    }
+
+    // --for: JSON Pointer navigation (mutually exclusive with view flags)
+    if let Some(ref raw_pointer) = cli.r#for {
+        let has_view_flag = cli.resources.is_some()
+            || cli.schemas.is_some()
+            || cli.auth
+            || cli.callbacks.is_some()
+            || cli.endpoint.is_some();
+        if has_view_flag {
+            anyhow::bail!(
+                "--for cannot be combined with view flags \
+                 (--resources, --schemas, --auth, --callbacks, --endpoint)"
+            );
+        }
+
+        let pointer = raw_pointer.strip_prefix('#').unwrap_or(raw_pointer);
+
+        // Empty pointer or "/" are valid per RFC 6901
+        if !pointer.is_empty() && !pointer.starts_with('/') {
+            anyhow::bail!(
+                "Invalid JSON Pointer '{}': must start with '/'",
+                raw_pointer
+            );
+        }
+
+        match spec::json_pointer_get(&loaded.raw_value, pointer) {
+            Some(node) => {
+                let output = if is_tty && !json {
+                    serde_json::to_string_pretty(node)
+                } else {
+                    serde_json::to_string(node)
+                }
+                .context("Internal error: failed to serialize JSON Pointer result")?;
+                println!("{}", output);
+                return Ok(());
+            }
+            None => {
+                let msg = format!("JSON Pointer '{}' not found in document.", raw_pointer);
+                if json {
+                    return Err(PreformattedError(json_error(&msg)).into());
+                }
+                anyhow::bail!("{}", msg);
+            }
+        }
     }
 
     // Determine if any view flags are set
@@ -341,7 +407,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     if !has_any_flag {
         // No flags = overview (same as before)
         let data = commands::overview::build(&loaded);
-        let output = if cli.json {
+        let output = if json {
             render::json::render_overview(&data, &bin_name, is_tty)
         } else {
             render::text::render_overview(&data, &bin_name, is_tty)
@@ -353,7 +419,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     // Common context for all flag handlers
     let ctx = Ctx {
         loaded: &loaded,
-        json: cli.json,
+        json,
         expand: cli.expand,
         bin_name: &bin_name,
         is_tty,
