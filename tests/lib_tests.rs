@@ -21,7 +21,7 @@ fn test_load_document_valid_fixture() {
     let spec_path = petstore_path();
     let cwd = manifest_dir();
 
-    let loaded = phyllotaxis::spec::load_document(Some(&spec_path), &cwd)
+    let loaded = phyllotaxis::spec::load_document(Some(&spec_path), &cwd, false)
         .expect("load_document should succeed for petstore fixture");
 
     assert_eq!(loaded.api.info.title, "Petstore API");
@@ -35,7 +35,7 @@ fn test_load_document_nonexistent_path() {
     let cwd = manifest_dir();
 
     let result =
-        phyllotaxis::spec::load_document(Some("/absolutely/does/not/exist/spec.yaml"), &cwd);
+        phyllotaxis::spec::load_document(Some("/absolutely/does/not/exist/spec.yaml"), &cwd, false);
 
     assert!(
         result.is_err(),
@@ -49,8 +49,8 @@ fn test_load_document_nonexistent_path() {
 fn test_extract_resource_groups_direct() {
     let spec_path = petstore_path();
     let cwd = manifest_dir();
-    let loaded =
-        phyllotaxis::spec::load_document(Some(&spec_path), &cwd).expect("load_document failed");
+    let loaded = phyllotaxis::spec::load_document(Some(&spec_path), &cwd, false)
+        .expect("load_document failed");
 
     let groups = phyllotaxis::commands::resources::extract_resource_groups(&loaded.api);
 
@@ -73,8 +73,8 @@ fn test_extract_resource_groups_direct() {
 fn test_list_schemas_direct() {
     let spec_path = petstore_path();
     let cwd = manifest_dir();
-    let loaded =
-        phyllotaxis::spec::load_document(Some(&spec_path), &cwd).expect("load_document failed");
+    let loaded = phyllotaxis::spec::load_document(Some(&spec_path), &cwd, false)
+        .expect("load_document failed");
 
     let names = phyllotaxis::commands::schemas::list_schemas(&loaded.api);
 
@@ -144,7 +144,7 @@ fn test_load_document_multi_file() {
         .unwrap()
         .to_string();
 
-    let loaded = phyllotaxis::spec::load_document(Some(&spec_path), &manifest_dir())
+    let loaded = phyllotaxis::spec::load_document(Some(&spec_path), &manifest_dir(), false)
         .expect("load_document should succeed for multi-file fixture");
 
     assert_eq!(loaded.api.info.title, "Multi-File API");
@@ -175,8 +175,8 @@ fn test_load_document_multi_file() {
 fn test_render_overview_text_direct() {
     let spec_path = petstore_path();
     let cwd = manifest_dir();
-    let loaded =
-        phyllotaxis::spec::load_document(Some(&spec_path), &cwd).expect("load_document failed");
+    let loaded = phyllotaxis::spec::load_document(Some(&spec_path), &cwd, false)
+        .expect("load_document failed");
 
     let data = phyllotaxis::commands::overview::build(&loaded);
     let output = phyllotaxis::render::text::render_overview(&data, "phyllotaxis", true);

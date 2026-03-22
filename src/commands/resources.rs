@@ -2025,6 +2025,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let result = resolve_path_item(&api.api, "/pets");
@@ -2036,6 +2037,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let result = resolve_path_item(&api.api, "/does-not-exist");
@@ -2047,6 +2049,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
@@ -2062,6 +2065,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
@@ -2073,6 +2077,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
@@ -2086,6 +2091,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
@@ -2098,6 +2104,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
@@ -2114,6 +2121,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
@@ -2129,6 +2137,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         // /pets/{id} has a path-level 'id' parameter with GET operation
@@ -2146,6 +2155,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();
@@ -2159,6 +2169,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         // POST /pets has a requestBody with application/json schema $ref: Pet
@@ -2173,6 +2184,7 @@ mod tests {
         let api = crate::spec::load_document(
             Some("tests/fixtures/petstore.yaml"),
             &std::path::PathBuf::from("."),
+            false,
         )
         .unwrap();
         let path_item = resolve_path_item(&api.api, "/pets").unwrap();

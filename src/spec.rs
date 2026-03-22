@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct Config {
@@ -251,17 +252,91 @@ fn resolve_relative(rel: &str, base: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Check if a string looks like an HTTP(S) URL.
+pub fn is_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// Fetch a remote OpenAPI spec and cache it locally.
+/// Returns the path to the cached file. Uses `~/.cache/phyllotaxis/<sha256>.ext`.
+/// If the file already exists in cache and `refresh` is false, returns the cached path.
+pub fn fetch_url(url: &str, refresh: bool) -> Result<PathBuf> {
+    let cache_dir = dirs_next::cache_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine cache directory"))?
+        .join("phyllotaxis");
+
+    // Determine file extension from URL path (default to .yaml)
+    let ext = url
+        .split('?')
+        .next()
+        .and_then(|path| Path::new(path).extension())
+        .and_then(|e| e.to_str())
+        .unwrap_or("yaml");
+
+    let hash = hex_sha256(url);
+    let cached_path = cache_dir.join(format!("{}.{}", hash, ext));
+
+    if !refresh && cached_path.is_file() {
+        return Ok(cached_path);
+    }
+
+    // Download
+    let response =
+        reqwest::blocking::get(url).with_context(|| format!("Failed to fetch {}", url))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        bail!(
+            "Failed to fetch {}: HTTP {} {}",
+            url,
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("Unknown")
+        );
+    }
+
+    let body = response
+        .text()
+        .with_context(|| format!("Failed to read response body from {}", url))?;
+
+    // Write to cache
+    std::fs::create_dir_all(&cache_dir)
+        .with_context(|| format!("Failed to create cache directory {}", cache_dir.display()))?;
+    std::fs::write(&cached_path, &body)
+        .with_context(|| format!("Failed to write cache file {}", cached_path.display()))?;
+
+    Ok(cached_path)
+}
+
+fn hex_sha256(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 #[derive(Debug)]
 pub struct LoadedDocument {
     pub api: openapiv3::OpenAPI,
     pub config: Config,
+    /// Post-bundling raw JSON value, retained for `--for` JSON Pointer navigation.
+    pub raw_value: serde_json::Value,
 }
 
 /// Load and parse an OpenAPI document. Resolves the document path, reads the file,
 /// and parses it as YAML (falling back to JSON).
-pub fn load_document(doc_flag: Option<&str>, start_dir: &Path) -> Result<LoadedDocument> {
+/// Supports HTTP/HTTPS URLs — remote specs are fetched and cached locally.
+pub fn load_document(
+    doc_flag: Option<&str>,
+    start_dir: &Path,
+    refresh: bool,
+) -> Result<LoadedDocument> {
     let scoped = load_config(start_dir);
-    let spec_path = resolve_doc_path(doc_flag, &scoped, start_dir)?;
+
+    // Check if the doc flag is a URL before entering the filesystem-based resolution
+    let spec_path = if doc_flag.is_some_and(is_url) {
+        fetch_url(doc_flag.unwrap(), refresh)?
+    } else {
+        resolve_doc_path(doc_flag, &scoped, start_dir)?
+    };
 
     // Guard against accidentally huge document files (100 MB limit)
     let metadata = std::fs::metadata(&spec_path)
@@ -290,13 +365,20 @@ pub fn load_document(doc_flag: Option<&str>, start_dir: &Path) -> Result<LoadedD
     bundle_refs(&mut value, base_dir, &mut vec![])
         .with_context(|| format!("Failed to bundle $refs in {}", spec_path.display()))?;
 
+    // Retain the post-bundling raw value for --for JSON Pointer navigation
+    let raw_value = value.clone();
+
     // Pass 3: convert fully-resolved Value into the typed OpenAPI struct
     let api: openapiv3::OpenAPI = serde_json::from_value(value)
         .with_context(|| format!("Failed to parse {}", spec_path.display()))?;
 
     let config = scoped.project.map(|(c, _)| c).unwrap_or_default();
 
-    Ok(LoadedDocument { api, config })
+    Ok(LoadedDocument {
+        api,
+        config,
+        raw_value,
+    })
 }
 
 /// Search for OpenAPI document files by peeking at file contents.
@@ -353,7 +435,7 @@ fn auto_detect_document(dir: &Path) -> Option<PathBuf> {
 /// An empty pointer returns the value itself. Each `/`-delimited segment
 /// is decoded (`~1` → `/`, `~0` → `~`) before lookup. Returns `None`
 /// if any segment is missing or if an intermediate value is not an object.
-fn json_pointer_get<'a>(
+pub fn json_pointer_get<'a>(
     value: &'a serde_json::Value,
     pointer: &str,
 ) -> Option<&'a serde_json::Value> {
@@ -706,6 +788,7 @@ mod tests {
         let result = load_document(
             Some("tests/fixtures/petstore.yaml"),
             std::path::Path::new("."),
+            false,
         );
         let loaded = result.expect("should parse petstore fixture");
         assert_eq!(loaded.api.info.title, "Petstore API");
@@ -718,7 +801,7 @@ mod tests {
         let bad_path = tmp.path().join("bad.yaml");
         fs::write(&bad_path, "this is not valid openapi yaml {{{").unwrap();
 
-        let result = load_document(Some(bad_path.to_str().unwrap()), tmp.path());
+        let result = load_document(Some(bad_path.to_str().unwrap()), tmp.path(), false);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Failed to parse"), "Error: {}", err);
@@ -1038,5 +1121,38 @@ mod tests {
         // Navigating through a non-object returns None
         let val = serde_json::json!({"a": "not_an_object"});
         assert_eq!(json_pointer_get(&val, "/a/b"), None);
+    }
+
+    #[test]
+    fn test_is_url_https() {
+        assert!(is_url("https://example.com/spec.yaml"));
+    }
+
+    #[test]
+    fn test_is_url_http() {
+        assert!(is_url("http://localhost:8080/openapi.json"));
+    }
+
+    #[test]
+    fn test_is_url_not_url() {
+        assert!(!is_url("./openapi.yaml"));
+        assert!(!is_url("/absolute/path.yaml"));
+        assert!(!is_url("petstore"));
+        assert!(!is_url(""));
+    }
+
+    #[test]
+    fn test_hex_sha256_deterministic() {
+        let a = hex_sha256("https://example.com/spec.yaml");
+        let b = hex_sha256("https://example.com/spec.yaml");
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 64, "SHA-256 hex should be 64 chars");
+    }
+
+    #[test]
+    fn test_hex_sha256_different_inputs() {
+        let a = hex_sha256("https://example.com/a.yaml");
+        let b = hex_sha256("https://example.com/b.yaml");
+        assert_ne!(a, b);
     }
 }

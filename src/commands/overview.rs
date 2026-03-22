@@ -114,7 +114,7 @@ mod tests {
     fn load_kitchen_sink() -> crate::spec::LoadedDocument {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let path = manifest_dir.join("tests/fixtures/kitchen-sink.yaml");
-        spec::load_document(Some(path.to_str().unwrap()), manifest_dir).unwrap()
+        spec::load_document(Some(path.to_str().unwrap()), manifest_dir, false).unwrap()
     }
 
     #[test]

@@ -36,6 +36,8 @@ indexmap = "2.13.0"
 strsim = "0.11"
 clap_complete = "4"
 dirs-next = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+sha2 = "0.10"
 
 [[bin]]
 name = "phyllotaxis"
