@@ -149,7 +149,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: rust-lang/crates-io-auth-action@c0a5b54191f4afd0e94adf6ec3365940c9172397 # v1
+      - uses: rust-lang/crates-io-auth-action@33f73ee4edf839c6f18874cc1fe4b5f88173383f # v1
         id: auth
 
       - run: cargo publish --locked
