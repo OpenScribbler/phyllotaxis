@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       github.event.pull_request.user.login != 'holdenhewett' &&
-      github.event.pull_request.user.login != 'OpenScribblerOwner' &&
+      github.event.pull_request.user.login != 'Open-Scribbler' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     steps:
       - name: Post comment and close
