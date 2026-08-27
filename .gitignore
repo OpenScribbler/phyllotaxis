@@ -21,3 +21,4 @@ specs/
 
 # Release guard sentinel (do not commit)
 .release-pending.yml
+.beads/
