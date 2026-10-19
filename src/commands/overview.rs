@@ -88,7 +88,7 @@ pub fn build(loaded: &LoadedDocument) -> OverviewData {
         .iter()
         .map(|g| (g.slug.clone(), g.endpoints.len()))
         .collect();
-    top_resources.sort_by(|a, b| b.1.cmp(&a.1));
+    top_resources.sort_by_key(|a| std::cmp::Reverse(a.1));
     top_resources.truncate(5);
 
     OverviewData {
