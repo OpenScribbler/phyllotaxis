@@ -1,0 +1,145 @@
+swagger: "2.0"
+info:
+  title: Swagger Petstore
+  version: "1.0.0"
+  description: Manage pets and their owners.
+host: pets.example.test
+basePath: /v1
+schemes: [https, http]
+consumes: [application/json]
+produces: [application/json]
+tags:
+  - name: Pets
+    description: Pets available for adoption.
+  - name: Uploads
+security:
+  - basicAuth: []
+securityDefinitions:
+  basicAuth:
+    type: basic
+    description: Sign in with a username and password.
+  apiKey:
+    type: apiKey
+    name: X-API-Key
+    in: header
+  oauth:
+    type: oauth2
+    flow: accessCode
+    authorizationUrl: https://pets.example.test/authorize
+    tokenUrl: https://pets.example.test/token
+    scopes:
+      pets: Manage pets
+parameters:
+  Limit:
+    name: limit
+    in: query
+    description: Maximum pets to return.
+    type: integer
+    format: int32
+    default: 10
+  PetBody:
+    name: pet
+    in: body
+    description: The pet to create.
+    required: true
+    schema:
+      $ref: '#/definitions/Pet'
+  Upload:
+    name: file
+    in: formData
+    description: A pet photograph.
+    required: true
+    type: file
+responses:
+  NotFound:
+    description: Pet not found.
+    schema:
+      $ref: '#/definitions/Error'
+definitions:
+  Owner:
+    type: object
+    required: [name]
+    properties:
+      name:
+        type: string
+  Pet:
+    type: object
+    required: [id, name]
+    properties:
+      id:
+        type: integer
+        format: int64
+      name:
+        type: string
+      owner:
+        $ref: '#/definitions/Owner'
+      tags:
+        type: array
+        x-nullable: true
+        items:
+          type: string
+  Error:
+    type: object
+    properties:
+      message:
+        type: string
+paths:
+  /pets:
+    get:
+      tags: [Pets]
+      summary: List pets
+      operationId: listPets
+      parameters:
+        - $ref: '#/parameters/Limit'
+      responses:
+        '200':
+          description: Available pets.
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Pet'
+          examples:
+            application/json:
+              - id: 1
+                name: Fern
+    post:
+      tags: [Pets]
+      summary: Create a pet
+      parameters:
+        - $ref: '#/parameters/PetBody'
+      responses:
+        '201':
+          description: Created pet.
+          schema:
+            $ref: '#/definitions/Pet'
+  /pets/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        type: integer
+        format: int64
+    get:
+      tags: [Pets]
+      summary: Get a pet
+      responses:
+        '200':
+          description: The pet.
+          schema:
+            $ref: '#/definitions/Pet'
+        '404':
+          $ref: '#/responses/NotFound'
+  /uploads:
+    post:
+      tags: [Uploads]
+      summary: Upload a pet photograph
+      consumes: [multipart/form-data]
+      parameters:
+        - $ref: '#/parameters/Upload'
+        - name: caption
+          in: formData
+          type: string
+          description: Photograph caption.
+      responses:
+        '204':
+          description: Uploaded.

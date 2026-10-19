@@ -1,0 +1,423 @@
+# The OpenAPI 3.0 conversion of petstore.yaml, written by hand.
+# Every phyllotaxis view of the two documents must match.
+openapi: "3.0.3"
+info:
+  title: Swagger Petstore
+  version: "2.1.0"
+  description: A Swagger 2.0 petstore for testing phyllotaxis.
+servers:
+  - url: https://petstore.example.com/v2
+  - url: http://petstore.example.com/v2
+tags:
+  - name: Pets
+    description: Pet management
+  - name: "Deprecated Pets (Deprecated)"
+    description: Old pet endpoints
+  - name: Animals
+    description: Polymorphic animals
+x-api-owner: platform-team
+security:
+  - api_key: []
+components:
+  securitySchemes:
+    api_key:
+      type: apiKey
+      name: X-API-Key
+      in: header
+      description: Key issued per client
+    basicAuth:
+      type: http
+      scheme: basic
+    petstore_implicit:
+      type: oauth2
+      flows:
+        implicit:
+          authorizationUrl: https://auth.example.com/authorize
+          scopes:
+            read:pets: Read pets
+            write:pets: Modify pets
+    petstore_code:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/authorize
+          tokenUrl: https://auth.example.com/token
+          scopes:
+            read:pets: Read pets
+    petstore_app:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/token
+          scopes:
+            admin: Administer the store
+    petstore_password:
+      type: oauth2
+      flows:
+        password:
+          tokenUrl: https://auth.example.com/token
+          scopes: {}
+  parameters:
+    PetId:
+      name: id
+      in: path
+      required: true
+      description: Pet identifier
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of results
+      schema:
+        type: integer
+        format: int32
+        default: 20
+        minimum: 1
+        maximum: 100
+  requestBodies:
+    PetBody:
+      required: true
+      description: The pet to store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Pet'
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique identifier
+        name:
+          type: string
+          description: Pet name
+          example: Fido
+        status:
+          type: string
+          enum: [available, pending, sold]
+          description: Pet availability status
+        nickname:
+          type: string
+          nullable: true
+          description: Optional nickname, can be cleared with null
+        owner:
+          $ref: '#/components/schemas/Owner'
+        tags:
+          type: array
+          items:
+            type: string
+          description: Classification tags
+    Owner:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Owner identifier
+        name:
+          type: string
+          description: Owner name
+    PetList:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          properties:
+            rank:
+              type: integer
+              description: Position in the listing
+    PetStatus:
+      type: string
+      enum: [available, pending, sold]
+      description: Availability status of a pet
+    Animal:
+      type: object
+      discriminator:
+        propertyName: kind
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          description: Animal kind
+        name:
+          type: string
+    Cat:
+      allOf:
+        - $ref: '#/components/schemas/Animal'
+        - type: object
+          properties:
+            indoor:
+              type: boolean
+              description: Whether the cat stays inside
+    Labels:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/Owner'
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          format: int32
+        message:
+          type: string
+paths:
+  /pets:
+    get:
+      tags: [Pets]
+      summary: List all pets
+      description: Returns a list of all pets in the store, optionally filtered by status.
+      operationId: listPets
+      parameters:
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum: [available, pending, sold]
+        - $ref: '#/components/parameters/Limit'
+        - name: tags
+          in: query
+          description: Tags to match
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        "200":
+          description: A list of pets
+          headers:
+            X-Total-Count:
+              description: Total number of pets
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+            application/xml:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+    post:
+      tags: [Pets]
+      summary: Create a pet
+      operationId: createPet
+      requestBody:
+        $ref: '#/components/requestBodies/PetBody'
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+              example:
+                id: abc-123
+                name: Fido
+                status: available
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /pets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PetId'
+    get:
+      tags: [Pets]
+      summary: Get a pet by ID
+      operationId: getPet
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        "404":
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Pets]
+      summary: Update a pet
+      operationId: updatePet
+      security:
+        - petstore_implicit: [write:pets]
+      requestBody:
+        required: true
+        description: The pet to store
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pet'
+          application/xml:
+            schema:
+              $ref: '#/components/schemas/Pet'
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        "404":
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Pets]
+      summary: Delete a pet
+      deprecated: true
+      operationId: deletePet
+      security:
+        - basicAuth: []
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Resource not found
+          content:
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /pets/{id}/photo:
+    parameters:
+      - $ref: '#/components/parameters/PetId'
+    post:
+      tags: [Pets]
+      summary: Upload a pet photo
+      operationId: uploadPetPhoto
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Image to upload
+                caption:
+                  type: string
+                  maxLength: 140
+                  description: Photo caption
+      responses:
+        "200":
+          description: Uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url:
+                    type: string
+                    description: Where the photo is served
+  /pets/{id}/status:
+    parameters:
+      - $ref: '#/components/parameters/PetId'
+    post:
+      tags: [Pets]
+      summary: Change a pet's status
+      operationId: setPetStatus
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [available, pending, sold]
+                  description: New status
+      responses:
+        "204":
+          description: Status changed
+  /old-pets:
+    get:
+      tags: ["Deprecated Pets (Deprecated)"]
+      summary: Old pet listing
+      deprecated: true
+      operationId: listOldPets
+      responses:
+        "200":
+          description: Old list
+  /animals:
+    get:
+      tags: [Animals]
+      summary: List animals
+      operationId: listAnimals
+      security:
+        - petstore_code: [read:pets]
+        - petstore_app: [admin]
+      parameters:
+        - name: kinds
+          in: query
+          description: Kinds to include
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+        - name: X-Request-Id
+          in: header
+          description: Correlation ID
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Animals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Animal'
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /pets/search:
+    get:
+      tags: [Pets]
+      summary: Fuzzy search pets
+      operationId: searchPets
+      security:
+        - petstore_password: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PetList'

@@ -1,0 +1,364 @@
+swagger: "2.0"
+info:
+  title: Swagger Petstore
+  version: "2.1.0"
+  description: A Swagger 2.0 petstore for testing phyllotaxis.
+host: petstore.example.com
+basePath: /v2
+schemes: [https, http]
+consumes: [application/json]
+produces: [application/json]
+tags:
+  - name: Pets
+    description: Pet management
+  - name: "Deprecated Pets (Deprecated)"
+    description: Old pet endpoints
+  - name: Animals
+    description: Polymorphic animals
+x-api-owner: platform-team
+securityDefinitions:
+  api_key:
+    type: apiKey
+    name: X-API-Key
+    in: header
+    description: Key issued per client
+  basicAuth:
+    type: basic
+  petstore_implicit:
+    type: oauth2
+    flow: implicit
+    authorizationUrl: https://auth.example.com/authorize
+    scopes:
+      read:pets: Read pets
+      write:pets: Modify pets
+  petstore_code:
+    type: oauth2
+    flow: accessCode
+    authorizationUrl: https://auth.example.com/authorize
+    tokenUrl: https://auth.example.com/token
+    scopes:
+      read:pets: Read pets
+  petstore_app:
+    type: oauth2
+    flow: application
+    tokenUrl: https://auth.example.com/token
+    scopes:
+      admin: Administer the store
+  petstore_password:
+    type: oauth2
+    flow: password
+    tokenUrl: https://auth.example.com/token
+    scopes: {}
+security:
+  - api_key: []
+parameters:
+  PetId:
+    name: id
+    in: path
+    required: true
+    type: string
+    format: uuid
+    description: Pet identifier
+  Limit:
+    name: limit
+    in: query
+    type: integer
+    format: int32
+    default: 20
+    minimum: 1
+    maximum: 100
+    description: Maximum number of results
+  PetBody:
+    name: pet
+    in: body
+    required: true
+    description: The pet to store
+    schema:
+      $ref: '#/definitions/Pet'
+responses:
+  NotFound:
+    description: Resource not found
+    schema:
+      $ref: '#/definitions/Error'
+definitions:
+  Pet:
+    type: object
+    required: [id, name]
+    properties:
+      id:
+        type: string
+        format: uuid
+        readOnly: true
+        description: Unique identifier
+      name:
+        type: string
+        description: Pet name
+        example: Fido
+      status:
+        type: string
+        enum: [available, pending, sold]
+        description: Pet availability status
+      nickname:
+        type: string
+        x-nullable: true
+        description: Optional nickname, can be cleared with null
+      owner:
+        $ref: '#/definitions/Owner'
+      tags:
+        type: array
+        items:
+          type: string
+        description: Classification tags
+  Owner:
+    type: object
+    properties:
+      id:
+        type: string
+        readOnly: true
+        description: Owner identifier
+      name:
+        type: string
+        description: Owner name
+  PetList:
+    allOf:
+      - $ref: '#/definitions/Pet'
+      - type: object
+        properties:
+          rank:
+            type: integer
+            description: Position in the listing
+  PetStatus:
+    type: string
+    enum: [available, pending, sold]
+    description: Availability status of a pet
+  Animal:
+    type: object
+    discriminator: kind
+    required: [kind]
+    properties:
+      kind:
+        type: string
+        description: Animal kind
+      name:
+        type: string
+  Cat:
+    allOf:
+      - $ref: '#/definitions/Animal'
+      - type: object
+        properties:
+          indoor:
+            type: boolean
+            description: Whether the cat stays inside
+  Labels:
+    type: object
+    additionalProperties:
+      $ref: '#/definitions/Owner'
+  Error:
+    type: object
+    required: [code, message]
+    properties:
+      code:
+        type: integer
+        format: int32
+      message:
+        type: string
+paths:
+  /pets:
+    get:
+      tags: [Pets]
+      summary: List all pets
+      description: Returns a list of all pets in the store, optionally filtered by status.
+      operationId: listPets
+      produces: [application/json, application/xml]
+      parameters:
+        - name: status
+          in: query
+          type: string
+          enum: [available, pending, sold]
+          description: Filter by status
+        - $ref: '#/parameters/Limit'
+        - name: tags
+          in: query
+          type: array
+          items:
+            type: string
+          collectionFormat: csv
+          description: Tags to match
+      responses:
+        "200":
+          description: A list of pets
+          headers:
+            X-Total-Count:
+              type: integer
+              description: Total number of pets
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Pet'
+    post:
+      tags: [Pets]
+      summary: Create a pet
+      operationId: createPet
+      parameters:
+        - $ref: '#/parameters/PetBody'
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/Pet'
+          examples:
+            application/json:
+              id: abc-123
+              name: Fido
+              status: available
+        "400":
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/Error'
+  /pets/{id}:
+    parameters:
+      - $ref: '#/parameters/PetId'
+    get:
+      tags: [Pets]
+      summary: Get a pet by ID
+      operationId: getPet
+      responses:
+        "200":
+          description: A pet
+          schema:
+            $ref: '#/definitions/Pet'
+        "404":
+          $ref: '#/responses/NotFound'
+    put:
+      tags: [Pets]
+      summary: Update a pet
+      operationId: updatePet
+      consumes: [application/json, application/xml]
+      security:
+        - petstore_implicit: [write:pets]
+      parameters:
+        - $ref: '#/parameters/PetBody'
+      responses:
+        "200":
+          description: Updated
+          schema:
+            $ref: '#/definitions/Pet'
+        "404":
+          $ref: '#/responses/NotFound'
+    delete:
+      tags: [Pets]
+      summary: Delete a pet
+      deprecated: true
+      operationId: deletePet
+      produces: [application/xml]
+      security:
+        - basicAuth: []
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: '#/responses/NotFound'
+  /pets/{id}/photo:
+    parameters:
+      - $ref: '#/parameters/PetId'
+    post:
+      tags: [Pets]
+      summary: Upload a pet photo
+      operationId: uploadPetPhoto
+      consumes: [multipart/form-data]
+      parameters:
+        - name: file
+          in: formData
+          type: file
+          required: true
+          description: Image to upload
+        - name: caption
+          in: formData
+          type: string
+          maxLength: 140
+          description: Photo caption
+      responses:
+        "200":
+          description: Uploaded
+          schema:
+            type: object
+            properties:
+              url:
+                type: string
+                description: Where the photo is served
+  /pets/{id}/status:
+    parameters:
+      - $ref: '#/parameters/PetId'
+    post:
+      tags: [Pets]
+      summary: Change a pet's status
+      operationId: setPetStatus
+      consumes: [application/x-www-form-urlencoded]
+      parameters:
+        - name: status
+          in: formData
+          type: string
+          required: true
+          enum: [available, pending, sold]
+          description: New status
+      responses:
+        "204":
+          description: Status changed
+  /old-pets:
+    get:
+      tags: ["Deprecated Pets (Deprecated)"]
+      summary: Old pet listing
+      deprecated: true
+      operationId: listOldPets
+      responses:
+        "200":
+          description: Old list
+  /animals:
+    get:
+      tags: [Animals]
+      summary: List animals
+      operationId: listAnimals
+      security:
+        - petstore_code: [read:pets]
+        - petstore_app: [admin]
+      parameters:
+        - name: kinds
+          in: query
+          type: array
+          items:
+            type: string
+          collectionFormat: multi
+          description: Kinds to include
+        - name: X-Request-Id
+          in: header
+          type: string
+          description: Correlation ID
+      responses:
+        "200":
+          description: Animals
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Animal'
+        default:
+          description: Unexpected error
+          schema:
+            $ref: '#/definitions/Error'
+  /pets/search:
+    get:
+      tags: [Pets]
+      summary: Fuzzy search pets
+      operationId: searchPets
+      security:
+        - petstore_password: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          type: string
+          description: Search query
+      responses:
+        "200":
+          description: Search results
+          schema:
+            $ref: '#/definitions/PetList'

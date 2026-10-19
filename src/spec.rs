@@ -4,6 +4,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 
+mod swagger2;
+
+/// Convert an already-bundled Swagger 2.0 document into OpenAPI 3.0.3.
+/// Returns an error naming the version when `swagger` is not `"2.0"` (or the
+/// number 2.0, which an unquoted YAML `swagger: 2.0` parses to).
+pub fn swagger2_to_openapi3(doc: serde_json::Value) -> Result<serde_json::Value> {
+    swagger2::convert(doc)
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct Config {
     /// Active document nickname (used when no --doc flag is given)
@@ -321,7 +330,7 @@ pub struct LoadedDocument {
     pub raw_value: serde_json::Value,
 }
 
-/// Load and parse an OpenAPI document. Resolves the document path, reads the file,
+/// Load and parse an OpenAPI or Swagger 2.0 document. Resolves the path, reads the file,
 /// and parses it as YAML (falling back to JSON).
 /// Supports HTTP/HTTPS URLs — remote specs are fetched and cached locally.
 pub fn load_document(
@@ -354,8 +363,7 @@ pub fn load_document(
         .with_context(|| format!("Failed to read {}", spec_path.display()))?;
 
     // Pass 1: parse to untyped Value (YAML first, then JSON)
-    let mut value: serde_json::Value = serde_yaml_ng::from_str(&content)
-        .or_else(|_| serde_json::from_str::<serde_json::Value>(&content))
+    let mut value = parse_document_text(&content)
         .with_context(|| format!("Failed to parse {}", spec_path.display()))?;
 
     // Pass 2: resolve all external $ref pointers in-place
@@ -368,6 +376,13 @@ pub fn load_document(
     // Retain the post-bundling raw value for --for JSON Pointer navigation
     let raw_value = value.clone();
 
+    // Convert Swagger only after bundling, so --for still sees the document as written.
+    if value.get("swagger").is_some() && value.get("openapi").is_none() {
+        value = swagger2_to_openapi3(value).with_context(|| {
+            format!("Failed to convert Swagger document {}", spec_path.display())
+        })?;
+    }
+
     // Pass 3: convert fully-resolved Value into the typed OpenAPI struct
     let api: openapiv3::OpenAPI = serde_json::from_value(value)
         .with_context(|| format!("Failed to parse {}", spec_path.display()))?;
@@ -379,6 +394,26 @@ pub fn load_document(
         config,
         raw_value,
     })
+}
+
+/// Parse document text as YAML, falling back to JSON. The YAML parser rejects a
+/// leading byte-order mark, so it is dropped first.
+fn parse_document_text(content: &str) -> serde_json::Result<serde_json::Value> {
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    serde_yaml_ng::from_str(content).or_else(|_| serde_json::from_str(content))
+}
+
+/// Whether the file at `path` declares Swagger 2.0 and no `openapi` version, the
+/// test `load_document` uses to choose conversion. `peek` holds the file's opening
+/// bytes, and only a file that mentions `swagger` there is read in full and parsed.
+/// Matching text alone would pick up a docker-compose service or a package.json
+/// dependency named swagger.
+pub(crate) fn is_swagger_file(path: &Path, peek: &str) -> bool {
+    peek.contains("swagger")
+        && std::fs::read_to_string(path)
+            .ok()
+            .and_then(|content| parse_document_text(&content).ok())
+            .is_some_and(|doc| doc.get("openapi").is_none() && swagger2::declares_version_two(&doc))
 }
 
 /// Search for OpenAPI document files by peeking at file contents.
@@ -400,7 +435,7 @@ fn auto_detect_document(dir: &Path) -> Option<PathBuf> {
         }
     }
 
-    // Broader search: check yaml/json files in dir for "openapi:" header
+    // Broader search: check yaml/json files for an OpenAPI or Swagger header.
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return None,
@@ -421,7 +456,10 @@ fn auto_detect_document(dir: &Path) -> Option<PathBuf> {
             let mut buf = [0u8; 200];
             let n = file.read(&mut buf).unwrap_or(0);
             let peek = String::from_utf8_lossy(&buf[..n]);
-            if peek.contains("openapi:") || peek.contains("\"openapi\"") {
+            if peek.contains("openapi:")
+                || peek.contains("\"openapi\"")
+                || is_swagger_file(&path, &peek)
+            {
                 return Some(path);
             }
         }
@@ -548,15 +586,13 @@ fn bundle_refs_impl(
                         base_dir.display()
                     )
                 })?;
-                let mut external: serde_json::Value = serde_yaml_ng::from_str(&content)
-                    .or_else(|_| serde_json::from_str::<serde_json::Value>(&content))
-                    .with_context(|| {
-                        format!(
-                            "Failed to parse {} (referenced from {})",
-                            canonical.display(),
-                            base_dir.display()
-                        )
-                    })?;
+                let mut external = parse_document_text(&content).with_context(|| {
+                    format!(
+                        "Failed to parse {} (referenced from {})",
+                        canonical.display(),
+                        base_dir.display()
+                    )
+                })?;
 
                 // Record where this file is being inlined BEFORE recursing
                 // (needed for self-referencing schemas like User → User)
