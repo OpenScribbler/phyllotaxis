@@ -319,7 +319,11 @@ pub fn fetch_url(url: &str, refresh: bool) -> Result<PathBuf> {
 fn hex_sha256(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Debug)]
@@ -1183,6 +1187,15 @@ mod tests {
         let b = hex_sha256("https://example.com/spec.yaml");
         assert_eq!(a, b);
         assert_eq!(a.len(), 64, "SHA-256 hex should be 64 chars");
+    }
+
+    #[test]
+    fn test_hex_sha256_matches_known_digest() {
+        // Cached file names must not change across sha2 upgrades.
+        assert_eq!(
+            hex_sha256("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]
