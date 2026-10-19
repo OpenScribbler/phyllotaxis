@@ -1,6 +1,11 @@
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = [
+    # unsafe-libyaml is unmaintained, and serde_yaml_ng 0.10, the newest
+    # release, still depends on it. No vulnerability is reported against it.
+    { id = "RUSTSEC-2024-0449", reason = "unmaintained; no maintained serde_yaml_ng release avoids it" },
+]
 
 [licenses]
 allow = [
