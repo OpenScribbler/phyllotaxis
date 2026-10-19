@@ -1,0 +1,158 @@
+openapi: "3.0.3"
+info:
+  title: Swagger Petstore
+  version: "1.0.0"
+  description: Manage pets and their owners.
+servers:
+  - url: https://pets.example.test/v1
+  - url: http://pets.example.test/v1
+tags:
+  - name: Pets
+    description: Pets available for adoption.
+  - name: Uploads
+security:
+  - basicAuth: []
+components:
+  schemas:
+    Owner:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        owner:
+          $ref: '#/components/schemas/Owner'
+        tags:
+          type: array
+          nullable: true
+          items:
+            type: string
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Maximum pets to return.
+      schema:
+        type: integer
+        format: int32
+        default: 10
+  requestBodies:
+    PetBody:
+      description: The pet to create.
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Pet'
+  responses:
+    NotFound:
+      description: Pet not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: Sign in with a username and password.
+    apiKey:
+      type: apiKey
+      name: X-API-Key
+      in: header
+    oauth:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://pets.example.test/authorize
+          tokenUrl: https://pets.example.test/token
+          scopes:
+            pets: Manage pets
+paths:
+  /pets:
+    get:
+      tags: [Pets]
+      summary: List pets
+      operationId: listPets
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Available pets.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+              example:
+                - id: 1
+                  name: Fern
+    post:
+      tags: [Pets]
+      summary: Create a pet
+      requestBody:
+        $ref: '#/components/requestBodies/PetBody'
+      responses:
+        '201':
+          description: Created pet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+  /pets/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      tags: [Pets]
+      summary: Get a pet
+      responses:
+        '200':
+          description: The pet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /uploads:
+    post:
+      tags: [Uploads]
+      summary: Upload a pet photograph
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: A pet photograph.
+                caption:
+                  type: string
+                  description: Photograph caption.
+              required: [file]
+      responses:
+        '204':
+          description: Uploaded.

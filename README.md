@@ -410,7 +410,7 @@ The `variables` map fills in server URL template variables (e.g., `{tenant}` bec
 
 - **OpenAPI 3.0.x** - fully supported
 - **OpenAPI 3.1** - not supported (the `openapiv3` parser targets 3.0)
-- **Swagger / OpenAPI 2.0** - not supported
+- **Swagger / OpenAPI 2.0** - supported, converted to OpenAPI 3.0 on load
 - **YAML and JSON documents** - both work
 - **`$ref` resolution** - local and external file references (multi-file documents)
 
@@ -455,7 +455,7 @@ phyllotaxis/
 | Document management UX (persistent `--doc`, nicknames) | Planned |
 | Remote URL loading (fetch specs from HTTP/HTTPS) | Planned |
 | OpenAPI 3.1 support | Planned |
-| Swagger / OpenAPI 2.0 support | Planned |
+| Swagger / OpenAPI 2.0 support | Done |
 | MCP server (LLM tool integration) | Planned |
 
 See [issues](https://github.com/OpenScribbler/phyllotaxis/issues) for what's being worked on now.

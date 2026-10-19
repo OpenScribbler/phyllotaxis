@@ -512,13 +512,14 @@ pub fn find_document_candidates(dir: &Path, framework: Option<&str>) -> Vec<Path
                 if seen.contains(&canonical) {
                     continue;
                 }
-                // Check first 200 bytes for "openapi" (bounded read)
+                // Check first 200 bytes for OpenAPI or Swagger (bounded read).
                 if let Ok(mut file) = std::fs::File::open(&path) {
                     use std::io::Read;
                     let mut buf = [0u8; 200];
                     let n = file.read(&mut buf).unwrap_or(0);
                     let snippet = String::from_utf8_lossy(&buf[..n]);
-                    if snippet.contains("openapi") {
+                    if snippet.contains("openapi") || crate::spec::is_swagger_file(&path, &snippet)
+                    {
                         seen.insert(canonical);
                         results.push(path);
                     }
